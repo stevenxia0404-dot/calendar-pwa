@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI日程管家 - 交互修复版</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            min-height: 100vh; 
+            padding-bottom: 160px;
+        }
+        
+        .header { 
+            background: rgba(255,255,255,0.95); 
+            backdrop-filter: blur(10px);
+            padding: 20px; 
+            position: sticky; 
+            top: 0; 
+            z-index: 100;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1);
+        }
+        .header h1 { font-size: 20px; color: #333; font-weight: 600; }
+        .header p { font-size: 12px; color: #666; margin-top: 4px; }
+        
+        .debug-info {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 8px 12px;
+            margin: 10px 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            display: none;
+        }
+        .debug-info.show { display: block; }
+        
+        /* 今日概览卡片 - 新增 */
+        .today-summary {
+            background: white;
+            margin: 15px;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            display: none;
+        }
+        .today-summary.active { display: block; animation: slideDown 0.3s ease-out; }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .today-summary-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #f0f0f0;
+        }
+        .today-summary-title { font-size: 18px; font-weight: 600; color: #333; }
+        .today-summary-date { font-size: 13px; color: #999; }
+        .today-summary-close {
+            width: 32px; height: 32px; border-radius: 50%; background: #f5f5f5;
+            border: none; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; font-size: 18px; color: #666;
+        }
+        
+        .summary-event-item {
+            display: flex; align-items: center; gap: 12px; padding: 12px 0;
+            border-bottom: 1px solid #f8f8f8;
+        }
+        .summary-event-item:last-child { border-bottom: none; }
+        .summary-time {
+            background: #667eea; color: white; padding: 6px 10px;
+            border-radius: 8px; font-size: 12px; font-weight: 600; min-width: 50px; text-align: center;
+        }
+        .summary-content h4 { font-size: 15px; color: #333; margin-bottom: 2px; }
+        .summary-content p { font-size: 12px; color: #999; }
+        .summary-empty { text-align: center; color: #999; padding: 30px 0; font-size: 14px; }
+        
+        .calendar-container { 
+            background: white; 
+            margin: 15px; 
+            border-radius: 20px; 
+            padding: 20px; 
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .cal-title { font-size: 18px; font-weight: 600; color: #333; }
+        .cal-nav { display: flex; gap: 10px; }
+        .cal-nav button { 
+            background: #f0f0f0; border: none; width: 32px; height: 32px; 
+            border-radius: 50%; cursor: pointer; font-size: 14px;
+        }
+        
+        .weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; margin-bottom: 10px; }
+        .weekdays div { font-size: 12px; color: #999; font-weight: 500; }
+        
+        .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+        .day { 
+            aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; 
+            border-radius: 12px; font-size: 14px; cursor: pointer; position: relative;
+            transition: all 0.3s; touch-action: manipulation;
+            user-select: none; -webkit-user-select: none;
+        }
+        .day:active { transform: scale(0.95); background: #f0f0f0; }
+        .day:hover { background: #f5f5f5; }
+        .day.active { background: #667eea; color: white; font-weight: 600; box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+        .day.has-event::after { 
+            content: ''; position: absolute; bottom: 6px; width: 4px; height: 4px; 
+            background: #ff6b6b; border-radius: 50%; 
+        }
+        .day.active.has-event::after { background: white; }
+        .day.today { border: 2px solid #667eea; color: #667eea; font-weight: 600; }
+        .day.today.active { background: #667eea; color: white; }
+        .day.other-month { color: #ccc; }
+        .day-num { font-size: 15px; line-height: 1; margin-bottom: 2px; }
+        .day-dot { width: 4px; height: 4px; border-radius: 50%; background: #ff6b6b; visibility: hidden; }
+        .day.has-event .day-dot { visibility: visible; }
+        
+        /* 日期点击提示 */
+        .date-click-hint {
+            text-align: center; font-size: 12px; color: #667eea; margin-top: 10px;
+            opacity: 0; transition: opacity 0.3s;
+        }
+        .date-click-hint.show { opacity: 1; }
+        
+        .events-section {
+            margin: 15px;
+            scroll-margin-top: 20px; /* 滚动偏移 */
+        }
+        .events-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 12px; padding: 0 5px;
+        }
+        .events-title { font-size: 16px; font-weight: 600; color: white; }
+        .events-count { font-size: 12px; color: rgba(255,255,255,0.8); background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 12px; }
+        
+        .event-card { 
+            background: white; margin-bottom: 10px; padding: 15px; 
+            border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            display: flex; align-items: center; gap: 12px;
+            animation: slideIn 0.3s ease-out; cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .event-card:active { transform: scale(0.98); }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .event-time { 
+            background: #667eea; color: white; padding: 8px 12px; 
+            border-radius: 10px; font-size: 12px; font-weight: 600; min-width: 60px; text-align: center;
+        }
+        .event-content { flex: 1; }
+        .event-content h3 { font-size: 15px; color: #333; margin-bottom: 4px; }
+        .event-content p { font-size: 12px; color: #999; }
+        .event-arrow { color: #ccc; font-size: 20px; }
+        
+        .empty-state { 
+            text-align: center; color: rgba(255,255,255,0.8); padding: 40px 20px; font-size: 14px;
+            background: rgba(255,255,255,0.1); border-radius: 15px; border: 2px dashed rgba(255,255,255,0.3);
+        }
+        .empty-state-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.6; }
+        
+        .input-container { 
+            position: fixed; bottom: 0; left: 0; right: 0; 
+            background: white; padding: 15px 20px 30px; 
+            box-shadow: 0 -5px 30px rgba(0,0,0,0.1);
+            border-radius: 25px 25px 0 0;
+            z-index: 1000;
+        }
+        .status-bar {
+            display: flex; gap: 12px; margin-bottom: 10px; font-size: 11px; color: #999;
+        }
+        .status-item { display: flex; align-items: center; gap: 4px; }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #ddd; }
+        .status-dot.active { background: #52c41a; }
+        .status-dot.error { background: #ff4d4f; }
+        
+        .input-wrapper { 
+            display: flex; align-items: flex-end; gap: 10px; 
+            background: #f8f9fa; padding: 10px; border-radius: 25px;
+            border: 2px solid transparent;
+            transition: border-color 0.3s;
+        }
+        .input-wrapper:focus-within { border-color: #667eea; background: white; }
+        
+        textarea { 
+            flex: 1; border: none; background: transparent; 
+            font-size: 16px; resize: none; outline: none; 
+            max-height: 100px; font-family: inherit;
+            min-height: 24px;
+        }
+        
+        .btn-send {
+            width: 40px; height: 40px; border-radius: 50%;
+            background: #667eea; border: none; color: white;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s;
+            flex-shrink: 0;
+        }
+        .btn-send:active { transform: scale(0.95); }
+        .btn-send:disabled { background: #ccc; }
+        
+        .mic-btn { 
+            width: 48px; height: 48px; border-radius: 50%; 
+            background: #667eea; border: none; color: white; 
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s; position: relative;
+            flex-shrink: 0;
+        }
+        .mic-btn:active { transform: scale(0.95); }
+        .mic-btn.recording { background: #ff6b6b; animation: pulse 1.5s infinite; }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.4); }
+            50% { box-shadow: 0 0 0 15px rgba(255,107,107,0); }
+        }
+        
+        .recording-hint { 
+            text-align: center; margin-top: 8px; 
+            font-size: 13px; color: #ff6b6b; display: none; 
+        }
+        .recording-hint.active { display: block; animation: fadeIn 0.3s; }
+        
+        .parsing { 
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8); color: white; padding: 20px 40px;
+            border-radius: 15px; display: none; z-index: 10000;
+            text-align: center;
+        }
+        .parsing.active { display: block; }
+        
+        .toast {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8); color: white; padding: 12px 24px;
+            border-radius: 25px; font-size: 14px; z-index: 10000;
+            display: none;
+        }
+        .toast.show { display: block; animation: fadeIn 0.3s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        /* 详情浮层 */
+        .detail-modal {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); z-index: 9999; display: none;
+            align-items: flex-end; justify-content: center;
+            padding: 20px; padding-bottom: 100px;
+        }
+        .detail-modal.active { display: flex; animation: fadeIn 0.3s; }
+        .detail-content {
+            background: white; border-radius: 20px; padding: 25px;
+            width: 100%; max-width: 400px; max-height: 60vh; overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .detail-title { font-size: 20px; font-weight: 600; }
+        .detail-close { width: 36px; height: 36px; border-radius: 50%; background: #f5f5f5; border: none; font-size: 20px; cursor: pointer; }
+        .detail-row { display: flex; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+        .detail-label { width: 80px; color: #999; font-size: 14px; }
+        .detail-value { flex: 1; color: #333; font-size: 15px; font-weight: 500; }
+        .detail-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .detail-btn {
+            flex: 1; padding: 12px; border-radius: 12px; border: none;
+            font-size: 15px; cursor: pointer; transition: all 0.3s;
+        }
+        .detail-btn-primary { background: #ff4d4f; color: white; }
+        .detail-btn-secondary { background: #f5f5f5; color: #666; }
+        .detail-btn:active { transform: scale(0.98); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📅 AI日程管家 <span style="font-size: 12px; color: #999; font-weight: normal;">v1.2交互版</span></h1>
+        <p>点击日历日期查看当日，点击列表看详情</p>
+    </div>
+    
+    <div class="debug-info" id="debugInfo">
+        <strong>调试：</strong><span id="debugText"></span>
+    </div>
+
+    <!-- 新增：今日概览浮层 -->
+    <div class="today-summary" id="todaySummary">
+        <div class="today-summary-header">
+            <div>
+                <div class="today-summary-title" id="summaryTitle">4月15日 日程</div>
+                <div class="today-summary-date" id="summaryDate">共 0 项</div>
+            </div>
+            <button class="today-summary-close" onclick="closeSummary()">×</button>
+        </div>
+        <div id="summaryContent">
+            <div class="summary-empty">当日暂无日程</div>
+        </div>
+    </div>
+
+    <div class="calendar-container">
+        <div class="cal-header">
+            <div class="cal-title" id="currentMonth">2026年4月</div>
+            <div class="cal-nav">
+                <button onclick="changeMonth(-1)">◀</button>
+                <button onclick="changeMonth(1)">▶</button>
+            </div>
+        </div>
+        <div class="weekdays">
+            <div>日</div><div>一</div><div>二</div><div>三</div>
+            <div>四</div><div>五</div><div>六</div>
+        </div>
+        <div class="days" id="calendarDays"></div>
+        <div class="date-click-hint" id="dateClickHint">👆 点击下方日期查看当日详情</div>
+    </div>
+
+    <!-- 日程列表区 -->
+    <div class="events-section" id="eventsSection">
+        <div class="events-header">
+            <div class="events-title" id="eventsTitle">选中日期日程</div>
+            <div class="events-count" id="eventsCount">0 项</div>
+        </div>
+        <div id="eventsList">
+            <div class="empty-state">
+                <div class="empty-state-icon">📝</div>
+                <div>点击上方日历日期查看当日</div>
+                <div style="font-size: 12px; margin-top: 8px; opacity: 0.7;">
+                    或输入新增日程
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 详情浮层 -->
+    <div class="detail-modal" id="detailModal" onclick="closeDetail(event)">
+        <div class="detail-content" onclick="event.stopPropagation()">
+            <div class="detail-header">
+                <div class="detail-title">日程详情</div>
+                <button class="detail-close" onclick="closeDetail()">×</button>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">事项</div>
+                <div class="detail-value" id="detailTitle">-</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">日期</div>
+                <div class="detail-value" id="detailDate">-</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">时间</div>
+                <div class="detail-value" id="detailTime">-</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">分类</div>
+                <div class="detail-value" id="detailCategory">-</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">原始输入</div>
+                <div class="detail-value" id="detailRaw" style="font-size: 13px; color: #666; word-break: break-all;">-</div>
+            </div>
+            <div class="detail-actions">
+                <button class="detail-btn detail-btn-secondary" onclick="closeDetail()">关闭</button>
+                <button class="detail-btn detail-btn-primary" onclick="deleteCurrentEvent()">删除日程</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="input-container">
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-dot" id="speechStatus"></div>
+                <span id="speechText">语音检测中...</span>
+            </div>
+            <div class="status-item">
+                <div class="status-dot active"></div>
+                <span>数据:本地</span>
+            </div>
+        </div>
+        
+        <div class="input-wrapper">
+            <textarea id="textInput" rows="1" placeholder="输入日程（如：明天下午3点开会），回车发送..."></textarea>
+            <button class="btn-send" id="sendBtn" onclick="handleTextSubmit()" title="发送">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+            </button>
+            <button class="mic-btn" id="micBtn" 
+                    onmousedown="startRecord()" 
+                    onmouseup="stopRecord()"
+                    ontouchstart="startRecord()" 
+                    ontouchend="stopRecord()"
+                    title="长按语音输入">
+                <svg id="micIcon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                </svg>
+            </button>
+        </div>
+        <div class="recording-hint" id="recordHint">正在聆听，松开后自动解析...</div>
+    </div>
+
+    <div class="parsing" id="parsingHint">AI解析中...</div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let events = [];
+        let currentDate = new Date();
+        let selectedDate = new Date();
+        let recognition = null;
+        let isRecording = false;
+        let tempTranscript = '';
+        let currentDetailId = null;
+        
+        function init() {
+            loadEvents();
+            renderCalendar();
+            initSpeech();
+            setupTextInput();
+            checkSpeechSupport();
+            
+            // 默认显示今天的概览
+            setTimeout(() => showDateSummary(new Date()), 500);
+        }
+        
+        function checkSpeechSupport() {
+            const statusDot = document.getElementById('speechStatus');
+            const statusText = document.getElementById('speechText');
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                statusDot.className = 'status-dot active';
+                statusText.textContent = '语音就绪';
+            } else {
+                statusDot.className = 'status-dot error';
+                statusText.textContent = '语音不支持';
+            }
+        }
+        
+        function initSpeech() {
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
+            try {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.continuous = false;
+                recognition.interimResults = true;
+                recognition.lang = 'zh-CN';
+                
+                recognition.onstart = () => {
+                    isRecording = true;
+                    tempTranscript = '';
+                    document.getElementById('micBtn').classList.add('recording');
+                    document.getElementById('recordHint').classList.add('active');
+                };
+                
+                recognition.onresult = (e) => {
+                    let interim = '';
+                    for (let i = e.resultIndex; i < e.results.length; i++) {
+                        if (e.results[i].isFinal) {
+                            tempTranscript += e.results[i][0].transcript;
+                        } else {
+                            interim += e.results[i][0].transcript;
+                        }
+                    }
+                    document.getElementById('textInput').value = tempTranscript + interim;
+                };
+                
+                recognition.onerror = (e) => {
+                    showToast('语音错误: ' + e.error);
+                    resetRecordUI();
+                };
+                
+                recognition.onend = () => {
+                    if (isRecording && tempTranscript.trim()) {
+                        parseSchedule(tempTranscript.trim());
+                    }
+                    resetRecordUI();
+                };
+            } catch(e) { console.error(e); }
+        }
+        
+        function resetRecordUI() {
+            isRecording = false;
+            document.getElementById('micBtn').classList.remove('recording');
+            document.getElementById('recordHint').classList.remove('active');
+        }
+        
+        function startRecord() {
+            if (!recognition) { showToast('浏览器不支持语音'); return; }
+            if (isRecording) return;
+            try { recognition.start(); } catch(e) {}
+        }
+        
+        function stopRecord() {
+            if (!recognition || !isRecording) return;
+            try { recognition.stop(); } catch(e) { resetRecordUI(); }
+        }
+        
+        function setupTextInput() {
+            const textarea = document.getElementById('textInput');
+            textarea.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleTextSubmit();
+                }
+            });
+            textarea.addEventListener('input', () => {
+                textarea.style.height = 'auto';
+                textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
+            });
+        }
+        
+        function handleTextSubmit() {
+            const textarea = document.getElementById('textInput');
+            const text = textarea.value.trim();
+            if (!text) { showToast('请输入内容'); return; }
+            parseSchedule(text);
+            textarea.value = '';
+            textarea.style.height = 'auto';
+        }
+        
+        function parseSchedule(text) {
+            document.getElementById('parsingHint').classList.add('active');
+            setTimeout(() => {
+                try {
+                    const event = mockAIParse(text);
+                    if (event) {
+                        events.push(event);
+                        saveEvents();
+                        renderCalendar();
+                        // 如果添加的是当前选中日期，刷新显示
+                        if (event.date === selectedDate.toISOString().split('T')[0]) {
+                            renderEvents();
+                            showDateSummary(selectedDate);
+                        }
+                        showToast('已添加: ' + event.title);
+                    } else {
+                        showToast('格式不符，试试"明天下午3点开会"');
+                    }
+                } catch(e) {
+                    showToast('错误: ' + e.message);
+                }
+                document.getElementById('parsingHint').classList.remove('active');
+            }, 500);
+        }
+        
+        function mockAIParse(text) {
+            const now = new Date();
+            let date = new Date(selectedDate);
+            let time = '09:00';
+            let title = text;
+            let duration = 60;
+            let category = '日程';
+            
+            // 日期解析增强
+            if (text.includes('今天')) date = new Date();
+            else if (text.includes('明天')) { date = new Date(); date.setDate(date.getDate() + 1); }
+            else if (text.includes('后天')) { date = new Date(); date.setDate(date.getDate() + 2); }
+            else if (text.includes('下周')) { date = new Date(); date.setDate(date.getDate() + 7); }
+            else {
+                const dayMatch = text.match(/(\d{1,2})[号日]/);
+                if (dayMatch) date.setDate(parseInt(dayMatch[1]));
+            }
+            
+            // 时间解析
+            const timeMatch = text.match(/(\d{1,2})[:：](\d{2})/) || text.match(/(\d{1,2})点/);
+            if (timeMatch) {
+                const hour = parseInt(timeMatch[1]);
+                const minute = timeMatch[2] ? parseInt(timeMatch[2]) : (text.includes('半') ? 30 : 0);
+                if (hour >= 0 && hour <= 23) time = `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+            }
+            
+            title = text.replace(/今天|明天|后天|下周|(\d{1,2})[号日]|(\d{1,2})[:：\.点](\d{2})?半?/g, '').trim();
+            if (!title) title = '新日程';
+            
+            if (text.includes('会')) category = '会议';
+            else if (text.includes('饭') || text.includes('吃')) category = '餐饮';
+            else if (text.includes('机') || text.includes('车') || text.includes('飞')) category = '出行';
+            
+            return {
+                id: Date.now(),
+                title: title,
+                date: date.toISOString().split('T')[0],
+                time: time,
+                category: category,
+                duration: duration + '分钟',
+                raw: text
+            };
+        }
+        
+        // 核心修复：点击日期后的完整交互
+        function selectDate(year, month, day) {
+            selectedDate = new Date(year, month, day);
+            renderCalendar(); // 高亮选中日期
+            
+            // 关键：显示该日期的概览浮层
+            showDateSummary(selectedDate);
+            
+            // 同时更新下方的列表（兼容旧习惯）
+            renderEvents();
+            
+            // 移动端震动反馈（如果有）
+            if (navigator.vibrate) navigator.vibrate(50);
+            
+            showDebug(`选中 ${year}-${month+1}-${day}，显示当日概览`);
+        }
+        
+        // 新增：显示日期概览浮层
+        function showDateSummary(date) {
+            const dateStr = date.toISOString().split('T')[0];
+            const dayEvents = events.filter(e => e.date === dateStr).sort((a,b) => a.time.localeCompare(b.time));
+            
+            const summaryDiv = document.getElementById('todaySummary');
+            const titleEl = document.getElementById('summaryTitle');
+            const dateEl = document.getElementById('summaryDate');
+            const contentEl = document.getElementById('summaryContent');
+            
+            // 格式化日期显示
+            const month = date.getMonth() + 1;
+            const day = date.getDate();
+            const weekDay = ['日','一','二','三','四','五','六'][date.getDay()];
+            titleEl.textContent = `${month}月${day}日 周${weekDay}`;
+            dateEl.textContent = `共 ${dayEvents.length} 项日程`;
+            
+            if (dayEvents.length === 0) {
+                contentEl.innerHTML = '<div class="summary-empty">当日暂无日程<br><span style="font-size:12px;opacity:0.6">点击下方输入添加</span></div>';
+            } else {
+                contentEl.innerHTML = dayEvents.map(e => `
+                    <div class="summary-event-item" onclick="showEventDetail(${e.id})">
+                        <div class="summary-time">${e.time}</div>
+                        <div class="summary-content">
+                            <h4>${e.title}</h4>
+                            <p>${e.category} · ${e.duration}</p>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            summaryDiv.classList.add('active');
+            
+            // 自动滚动到概览区域（确保用户看见）
+            setTimeout(() => {
+                summaryDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }, 100);
+        }
+        
+        function closeSummary() {
+            document.getElementById('todaySummary').classList.remove('active');
+        }
+        
+        function renderCalendar() {
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            document.getElementById('currentMonth').textContent = `${year}年${month + 1}月`;
+            
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const daysInPrevMonth = new Date(year, month, 0).getDate();
+            
+            let html = '';
+            
+            for (let i = firstDay - 1; i >= 0; i--) {
+                html += `<div class="day other-month"><span class="day-num">${daysInPrevMonth - i}</span><span class="day-dot"></span></div>`;
+            }
+            
+            const today = new Date();
+            for (let i = 1; i <= daysInMonth; i++) {
+                const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
+                const hasEvent = events.some(e => e.date === dateStr);
+                const isToday = today.getDate() === i && today.getMonth() === month && today.getFullYear() === year;
+                const isActive = selectedDate.getDate() === i && selectedDate.getMonth() === month && selectedDate.getFullYear() === year;
+                
+                // 关键：添加ontouchstart确保移动端响应
+                html += `<div class="day ${isActive ? 'active' : ''} ${hasEvent ? 'has-event' : ''} ${isToday ? 'today' : ''}" 
+                         onclick="selectDate(${year}, ${month}, ${i})" 
+                         ontouchstart="selectDate(${year}, ${month}, ${i})"
+                         data-date="${dateStr}">
+                         <span class="day-num">${i}</span><span class="day-dot"></span>
+                      </div>`;
+            }
+            
+            document.getElementById('calendarDays').innerHTML = html;
+        }
+        
+        function renderEvents() {
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const dayEvents = events.filter(e => e.date === dateStr).sort((a,b) => a.time.localeCompare(b.time));
+            
+            document.getElementById('eventsTitle').textContent = `${selectedDate.getMonth()+1}月${selectedDate.getDate()}日 日程`;
+            document.getElementById('eventsCount').textContent = dayEvents.length + ' 项';
+            
+            const container = document.getElementById('eventsList');
+            if (dayEvents.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📝</div>
+                        <div>${dateStr} 暂无日程</div>
+                        <div style="font-size: 12px; margin-top: 8px; opacity: 0.7;">点击下方输入框添加</div>
+                    </div>`;
+            } else {
+                container.innerHTML = dayEvents.map(e => `
+                    <div class="event-card" onclick="showEventDetail(${e.id})">
+                        <div class="event-time">${e.time}</div>
+                        <div class="event-content">
+                            <h3>${e.title}</h3>
+                            <p>${e.category} · ${e.duration}</p>
+                        </div>
+                        <div class="event-arrow">›</div>
+                    </div>
+                `).join('');
+            }
+        }
+        
+        function changeMonth(delta) {
+            currentDate.setMonth(currentDate.getMonth() + delta);
+            renderCalendar();
+            closeSummary(); // 切换月份时关闭概览
+        }
+        
+        // 详情弹窗
+        function showEventDetail(id) {
+            const event = events.find(e => e.id === id);
+            if (!event) return;
+            
+            currentDetailId = id;
+            document.getElementById('detailTitle').textContent = event.title;
+            document.getElementById('detailDate').textContent = event.date;
+            document.getElementById('detailTime').textContent = event.time + ' (' + event.duration + ')';
+            document.getElementById('detailCategory').textContent = event.category;
+            document.getElementById('detailRaw').textContent = event.raw;
+            
+            document.getElementById('detailModal').classList.add('active');
+        }
+        
+        function closeDetail(e) {
+            if (!e || e.target.id === 'detailModal') {
+                document.getElementById('detailModal').classList.remove('active');
+                currentDetailId = null;
+            }
+        }
+        
+        function deleteCurrentEvent() {
+            if (!currentDetailId) return;
+            if (!confirm('确定删除这条日程吗？')) return;
+            
+            events = events.filter(e => e.id !== currentDetailId);
+            saveEvents();
+            renderCalendar();
+            renderEvents();
+            showDateSummary(selectedDate); // 刷新概览
+            closeDetail();
+            showToast('已删除');
+        }
+        
+        function saveEvents() {
+            localStorage.setItem('schedule_events_v2', JSON.stringify(events));
+        }
+        
+        function loadEvents() {
+            try {
+                const saved = localStorage.getItem('schedule_events_v2');
+                if (saved) events = JSON.parse(saved);
+            } catch(e) { console.error(e); }
+        }
+        
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2500);
+        }
+        
+        function showDebug(msg) {
+            console.log(msg);
+            const debugDiv = document.getElementById('debugInfo');
+            const debugText = document.getElementById('debugText');
+            debugText.textContent = msg;
+            debugDiv.classList.add('show');
+            setTimeout(() => debugDiv.classList.remove('show'), 3000);
+        }
+        
+        window.onload = init;
+    </script>
+</body>
+</html>
