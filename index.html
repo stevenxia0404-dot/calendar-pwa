@@ -3,59 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI日程管家 - 时间修复版</title>
+    <title>AI日程管家 - 时间解析修复版</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding-bottom: 160px; }
-        .header { background: rgba(255,255,255,0.95); padding: 20px; position: sticky; top: 0; z-index: 100; }
-        .header h1 { font-size: 20px; color: #333; }
-        .debug-info { background: #fff3cd; padding: 10px; margin: 10px 15px; border-radius: 8px; font-size: 12px; color: #856404; display: none; }
-        .calendar-container { background: white; margin: 15px; border-radius: 20px; padding: 20px; }
+        .header { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 20px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 20px rgba(0,0,0,0.1); }
+        .header h1 { font-size: 20px; color: #333; font-weight: 600; }
+        .debug-box { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 10px; margin: 10px 15px; border-radius: 8px; font-size: 12px; display: none; }
+        .debug-box.show { display: block; }
+        .calendar-container { background: white; margin: 15px; border-radius: 20px; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
         .cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        .cal-title { font-size: 18px; font-weight: 600; }
+        .cal-title { font-size: 18px; font-weight: 600; color: #333; }
+        .cal-nav { display: flex; gap: 10px; }
+        .cal-nav button { background: #f0f0f0; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 14px; }
         .weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; margin-bottom: 10px; font-size: 12px; color: #999; }
         .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
-        .day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 12px; font-size: 14px; cursor: pointer; position: relative; }
+        .day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 12px; font-size: 14px; cursor: pointer; position: relative; transition: all 0.3s; }
         .day.active { background: #667eea; color: white; font-weight: 600; }
         .day.has-event::after { content: ''; position: absolute; bottom: 6px; width: 4px; height: 4px; background: #ff6b6b; border-radius: 50%; }
-        .input-container { position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 15px 20px 30px; border-radius: 25px 25px 0 0; box-shadow: 0 -5px 30px rgba(0,0,0,0.1); }
-        .input-wrapper { display: flex; gap: 10px; background: #f8f9fa; padding: 10px; border-radius: 25px; }
-        textarea { flex: 1; border: none; background: transparent; font-size: 16px; resize: none; outline: none; }
-        button { padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 20px; cursor: pointer; }
-        .toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 12px 24px; border-radius: 25px; display: none; z-index: 10000; }
+        .day.today { border: 2px solid #667eea; color: #667eea; font-weight: 600; }
+        .input-container { position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 15px 20px 30px; box-shadow: 0 -5px 30px rgba(0,0,0,0.1); border-radius: 25px 25px 0 0; z-index: 1000; }
+        .input-wrapper { display: flex; align-items: flex-end; gap: 10px; background: #f8f9fa; padding: 10px; border-radius: 25px; }
+        textarea { flex: 1; border: none; background: transparent; font-size: 16px; resize: none; outline: none; max-height: 100px; font-family: inherit; }
+        .btn-send { width: 40px; height: 40px; border-radius: 50%; background: #667eea; border: none; color: white; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 12px 24px; border-radius: 25px; font-size: 14px; z-index: 10000; display: none; }
+        .toast.show { display: block; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>📅 AI日程管家</h1>
-        <p style="font-size: 12px; color: #666;">支持"下午3点"识别为15:00</p>
+        <h1>📅 AI日程管家 <span style="font-size: 12px; color: #999;">v1.6时间强化版</span></h1>
+        <p>修复：下午3点 → 15:00</p>
     </div>
     
-    <div class="debug-info" id="debugInfo"></div>
+    <div class="debug-box" id="debugBox">
+        <strong>调试信息：</strong><span id="debugText"></span>
+    </div>
 
     <div class="calendar-container">
         <div class="cal-header">
-            <div class="cal-title" id="currentMonth"></div>
-            <div>
-                <button onclick="changeMonth(-1)" style="padding: 5px 10px; margin-right: 5px;">◀</button>
-                <button onclick="changeMonth(1)" style="padding: 5px 10px;">▶</button>
+            <div class="cal-title" id="currentMonth">2026年4月</div>
+            <div class="cal-nav">
+                <button onclick="changeMonth(-1)">◀</button>
+                <button onclick="changeMonth(1)">▶</button>
             </div>
         </div>
         <div class="weekdays"><div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div></div>
         <div class="days" id="calendarDays"></div>
     </div>
 
+    <div style="background: white; margin: 15px; border-radius: 15px; padding: 15px; display: none;" id="resultBox">
+        <div style="font-weight: 600; margin-bottom: 10px;">添加成功</div>
+        <div id="resultContent" style="font-size: 14px; color: #666;"></div>
+    </div>
+
     <div class="input-container">
         <div class="input-wrapper">
-            <textarea id="textInput" rows="1" placeholder="输入：后天下午3点买菜"></textarea>
-            <button onclick="handleSubmit()">添加</button>
+            <textarea id="textInput" rows="1" placeholder="试试：后天下午3点买菜"></textarea>
+            <button class="btn-send" onclick="handleSubmit()">发送</button>
         </div>
     </div>
 
     <div class="toast" id="toast"></div>
 
     <script>
-        // 本地日期格式化（防时区Bug）
         function formatLocalDate(date) {
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -63,11 +74,13 @@
             return `${year}-${month}-${day}`;
         }
 
-        let events = JSON.parse(localStorage.getItem('sched_v16') || '[]');
+        let events = [];
         let currentDate = new Date();
         let selectedDate = new Date();
+        let isProcessing = false;
 
         function init() {
+            loadEvents();
             renderCalendar();
             document.getElementById('textInput').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -77,48 +90,69 @@
             });
         }
 
-        // ========== 核心：时间解析修复 ==========
-        function extractTime(text) {
-            // 1. 判断上午/下午/晚上
-            let isPM = text.includes('下午') || text.includes('晚上');
+        // ========== 核心修复：强化时间解析 ==========
+        function parseTime(text) {
+            // 1. 先判断上午/下午/晚上
+            let isPM = false;
+            let isAM = false;
             
-            // 2. 提取小时和分钟（支持：3点、3:00、15:30、3点30分）
-            let hour = 9, minute = 0;
+            if (text.includes('下午') || text.includes('晚上')) isPM = true;
+            if (text.includes('上午') || text.includes('早上')) isAM = true;
+
+            // 2. 提取时间数字（支持：3点、3:00、3点30分、15:30）
+            let hour = 9; // 默认上午9点
+            let minute = 0;
+            
+            // 匹配模式A：数字+点+[数字+分]（如"3点"、"3点30分"）
+            const patternA = text.match(/(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分?)?/);
+            // 匹配模式B：数字:数字（如"15:30"、"3:30"）
+            const patternB = text.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
+            
             let matched = false;
             
-            // 尝试匹配"3点30分"或"3点"
-            let m = text.match(/(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分?)?/);
-            if (m) {
-                hour = parseInt(m[1]);
-                if (m[2]) minute = parseInt(m[2]);
+            if (patternA) {
+                hour = parseInt(patternA[1]);
+                if (patternA[2]) minute = parseInt(patternA[2]);
                 matched = true;
-            } else {
-                // 尝试匹配"15:30"
-                m = text.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
-                if (m) {
-                    hour = parseInt(m[1]);
-                    minute = parseInt(m[2]);
-                    matched = true;
-                    isPM = false; // 24小时制不再加12
-                }
+                console.log('匹配到模式A（点）:', hour, '点', minute, '分');
+            } else if (patternB) {
+                hour = parseInt(patternB[1]);
+                minute = parseInt(patternB[2]);
+                matched = true;
+                // 如果已经是24小时制（如15:30），忽略上午/下午标记
+                if (hour > 12) isPM = false;
+                console.log('匹配到模式B（冒号）:', hour, ':', minute);
             }
             
-            // 3. 下午/晚上加12小时（12小时制转换）
-            if (isPM && hour < 12) hour += 12;
+            // 3. 12小时制转换（只有匹配到时间才转换）
+            if (matched) {
+                if (isPM && hour < 12) {
+                    hour += 12; // 下午3点 → 15点
+                    console.log('转换下午时间:', hour);
+                }
+                // 早上/上午不改变（或如果写了早上12点这种奇怪说法，转为0点）
+                if (isAM && hour === 12) hour = 0;
+            }
             
-            // 边界检查
+            // 4. 边界检查
             if (hour > 23) hour = 23;
             if (minute > 59) minute = 59;
             
             return {
-                str: `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`,
-                hour, minute, isPM, matched
+                hour: hour,
+                minute: minute,
+                timeStr: `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`,
+                isPM: isPM,
+                matched: matched
             };
         }
 
         function handleSubmit() {
+            if (isProcessing) return;
             const text = document.getElementById('textInput').value.trim();
             if (!text) return;
+            
+            isProcessing = true;
             
             // 解析日期
             let date = new Date(selectedDate);
@@ -126,32 +160,40 @@
             else if (text.includes('明天')) { date = new Date(); date.setDate(date.getDate() + 1); }
             else if (text.includes('后天')) { date = new Date(); date.setDate(date.getDate() + 2); }
             
-            // 解析时间（新函数）
-            const timeObj = extractTime(text);
+            // 解析时间（使用新函数）
+            const timeObj = parseTime(text);
             
-            // 提取标题
-            let title = text.replace(/今天|明天|后天|\d{1,2}[号日]|(上午|下午|晚上|早上)?\s*\d{1,2}\s*[点:：]\s*\d{0,2}\s*[分]?/g, '').trim() || '新日程';
+            // 提取标题（移除时间相关词）
+            let title = text.replace(/今天|明天|后天|下周|\d{1,2}[号日]|(上午|下午|晚上|早上)?\s*\d{1,2}\s*[点:：]\s*\d{0,2}\s*[分]?/g, '').trim();
+            if (!title) title = '新日程';
             
-            // 保存
             const event = {
                 id: Date.now(),
                 title: title,
                 date: formatLocalDate(date),
-                time: timeObj.str,
+                time: timeObj.timeStr,
                 raw: text
             };
             
             events.push(event);
-            localStorage.setItem('sched_v16', JSON.stringify(events));
+            saveEvents();
             renderCalendar();
             
             // 显示调试信息
-            const debug = document.getElementById('debugInfo');
-            debug.style.display = 'block';
-            debug.innerHTML = `<strong>解析：</strong>"${text}" → ${event.date} ${event.time} (下午:${timeObj.isPM})`;
+            document.getElementById('debugBox').classList.add('show');
+            document.getElementById('debugText').textContent = `输入:"${text}" → 时间:${timeObj.timeStr} (PM:${timeObj.isPM}, 匹配:${timeObj.matched})`;
             
-            showToast(`已添加：${event.time} ${event.title}`);
+            // 显示结果
+            document.getElementById('resultBox').style.display = 'block';
+            document.getElementById('resultContent').innerHTML = `
+                <strong>日期：</strong>${event.date}<br>
+                <strong>时间：</strong>${event.time}<br>
+                <strong>事项：</strong>${event.title}
+            `;
+            
+            showToast(`已添加: ${event.time} ${event.title}`);
             document.getElementById('textInput').value = '';
+            isProcessing = false;
         }
 
         function renderCalendar() {
@@ -162,12 +204,10 @@
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             let html = '';
             
-            // 上月
             for (let i = firstDay - 1; i >= 0; i--) {
                 html += `<div class="day" style="color:#ccc">${new Date(year, month, 0).getDate() - i}</div>`;
             }
             
-            // 当月
             for (let i = 1; i <= daysInMonth; i++) {
                 const d = new Date(year, month, i);
                 const dateStr = formatLocalDate(d);
@@ -175,7 +215,7 @@
                 const isActive = formatLocalDate(selectedDate) === dateStr;
                 const isToday = formatLocalDate(new Date()) === dateStr;
                 
-                html += `<div class="day ${isActive ? 'active' : ''} ${hasEvent ? 'has-event' : ''} ${isToday ? 'today' : ''}" onclick="selectDate(${year},${month},${i})">${i}</div>`;
+                html += `<div class="day ${isActive ? 'active' : ''} ${hasEvent ? 'has-event' : ''} ${isToday ? 'today' : ''}" onclick="selectDate(${year}, ${month}, ${i})">${i}</div>`;
             }
             
             document.getElementById('calendarDays').innerHTML = html;
@@ -191,14 +231,22 @@
             renderCalendar();
         }
 
+        function saveEvents() {
+            localStorage.setItem('schedule_debug', JSON.stringify(events));
+        }
+
+        function loadEvents() {
+            const saved = localStorage.getItem('schedule_debug');
+            if (saved) events = JSON.parse(saved);
+        }
+
         function showToast(msg) {
             const t = document.getElementById('toast');
             t.textContent = msg;
-            t.style.display = 'block';
-            setTimeout(() => t.style.display = 'none', 2000);
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 2000);
         }
 
         window.onload = init;
     </script>
 </body>
-</html>
