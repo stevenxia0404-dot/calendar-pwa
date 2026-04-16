@@ -3,233 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI日程管家 - v1.4防重复版</title>
+    <title>AI日程管家 - 时间修复版</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-            min-height: 100vh; 
-            padding-bottom: 160px;
-        }
-        .header { 
-            background: rgba(255,255,255,0.95); 
-            backdrop-filter: blur(10px);
-            padding: 20px; 
-            position: sticky; 
-            top: 0; 
-            z-index: 100;
-            box-shadow: 0 2px 20px rgba(0,0,0,0.1);
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding-bottom: 160px; }
+        .header { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 20px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 20px rgba(0,0,0,0.1); }
         .header h1 { font-size: 20px; color: #333; font-weight: 600; }
-        .header p { font-size: 12px; color: #666; margin-top: 4px; }
-        .debug-info {
-            background: #fff3cd; border: 1px solid #ffeaa7; color: #856404;
-            padding: 8px 12px; margin: 10px 15px; border-radius: 8px;
-            font-size: 12px; display: none;
-        }
-        .debug-info.show { display: block; }
-        .today-summary {
-            background: white; margin: 15px; border-radius: 20px; padding: 20px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1); display: none;
-        }
-        .today-summary.active { display: block; animation: slideDown 0.3s ease-out; }
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .today-summary-header {
-            display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #f0f0f0;
-        }
-        .today-summary-title { font-size: 18px; font-weight: 600; color: #333; }
-        .today-summary-date { font-size: 13px; color: #999; }
-        .today-summary-close {
-            width: 32px; height: 32px; border-radius: 50%; background: #f5f5f5;
-            border: none; display: flex; align-items: center; justify-content: center;
-            cursor: pointer; font-size: 18px; color: #666;
-        }
-        .summary-event-item {
-            display: flex; align-items: center; gap: 12px; padding: 12px 0;
-            border-bottom: 1px solid #f8f8f8;
-        }
-        .summary-event-item:last-child { border-bottom: none; }
-        .summary-time {
-            background: #667eea; color: white; padding: 6px 10px;
-            border-radius: 8px; font-size: 12px; font-weight: 600; min-width: 50px; text-align: center;
-        }
-        .summary-content h4 { font-size: 15px; color: #333; margin-bottom: 2px; }
-        .summary-content p { font-size: 12px; color: #999; }
-        .summary-empty { text-align: center; color: #999; padding: 30px 0; font-size: 14px; }
-        .calendar-container { 
-            background: white; margin: 15px; border-radius: 20px; padding: 20px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-        }
+        .today-summary { background: white; margin: 15px; border-radius: 20px; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); display: none; }
+        .today-summary.active { display: block; }
+        .calendar-container { background: white; margin: 15px; border-radius: 20px; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
         .cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
         .cal-title { font-size: 18px; font-weight: 600; color: #333; }
         .cal-nav { display: flex; gap: 10px; }
-        .cal-nav button { 
-            background: #f0f0f0; border: none; width: 32px; height: 32px; 
-            border-radius: 50%; cursor: pointer; font-size: 14px;
-        }
-        .weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; margin-bottom: 10px; }
-        .weekdays div { font-size: 12px; color: #999; font-weight: 500; }
+        .cal-nav button { background: #f0f0f0; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 14px; }
+        .weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; margin-bottom: 10px; font-size: 12px; color: #999; }
         .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
-        .day { 
-            aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; 
-            border-radius: 12px; font-size: 14px; cursor: pointer; position: relative;
-            transition: all 0.3s; touch-action: manipulation;
-            user-select: none; -webkit-user-select: none;
-        }
-        .day:active { transform: scale(0.95); background: #f0f0f0; }
-        .day:hover { background: #f5f5f5; }
-        .day.active { background: #667eea; color: white; font-weight: 600; box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
-        .day.has-event::after { 
-            content: ''; position: absolute; bottom: 6px; width: 4px; height: 4px; 
-            background: #ff6b6b; border-radius: 50%; 
-        }
-        .day.active.has-event::after { background: white; }
+        .day { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 12px; font-size: 14px; cursor: pointer; position: relative; transition: all 0.3s; }
+        .day.active { background: #667eea; color: white; font-weight: 600; }
+        .day.has-event::after { content: ''; position: absolute; bottom: 6px; width: 4px; height: 4px; background: #ff6b6b; border-radius: 50%; }
         .day.today { border: 2px solid #667eea; color: #667eea; font-weight: 600; }
-        .day.today.active { background: #667eea; color: white; }
-        .day.other-month { color: #ccc; }
-        .day-num { font-size: 15px; line-height: 1; margin-bottom: 2px; }
-        .events-section { margin: 15px; scroll-margin-top: 20px; }
-        .events-header {
-            display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 12px; padding: 0 5px;
-        }
-        .events-title { font-size: 16px; font-weight: 600; color: white; }
-        .events-count { 
-            font-size: 12px; color: rgba(255,255,255,0.8); 
-            background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 12px; 
-        }
-        .event-card { 
-            background: white; margin-bottom: 10px; padding: 15px; 
-            border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-            display: flex; align-items: center; gap: 12px;
-            animation: slideIn 0.3s ease-out; cursor: pointer; transition: transform 0.2s;
-        }
-        .event-card:active { transform: scale(0.98); }
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .event-time { 
-            background: #667eea; color: white; padding: 8px 12px; 
-            border-radius: 10px; font-size: 12px; font-weight: 600; min-width: 60px; text-align: center;
-        }
-        .event-content { flex: 1; }
-        .event-content h3 { font-size: 15px; color: #333; margin-bottom: 4px; }
-        .event-content p { font-size: 12px; color: #999; }
-        .event-arrow { color: #ccc; font-size: 20px; }
-        .empty-state { 
-            text-align: center; color: rgba(255,255,255,0.8); padding: 40px 20px; font-size: 14px;
-            background: rgba(255,255,255,0.1); border-radius: 15px; border: 2px dashed rgba(255,255,255,0.3);
-        }
-        .empty-state-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.6; }
-        .input-container { 
-            position: fixed; bottom: 0; left: 0; right: 0; 
-            background: white; padding: 15px 20px 30px; 
-            box-shadow: 0 -5px 30px rgba(0,0,0,0.1);
-            border-radius: 25px 25px 0 0; z-index: 1000;
-        }
-        .status-bar {
-            display: flex; gap: 12px; margin-bottom: 10px; font-size: 11px; color: #999;
-        }
-        .status-item { display: flex; align-items: center; gap: 4px; }
-        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #ddd; }
-        .status-dot.active { background: #52c41a; }
-        .status-dot.error { background: #ff4d4f; }
-        .input-wrapper { 
-            display: flex; align-items: flex-end; gap: 10px; 
-            background: #f8f9fa; padding: 10px; border-radius: 25px;
-            border: 2px solid transparent; transition: border-color 0.3s;
-        }
-        .input-wrapper:focus-within { border-color: #667eea; background: white; }
-        textarea { 
-            flex: 1; border: none; background: transparent; 
-            font-size: 16px; resize: none; outline: none; 
-            max-height: 100px; font-family: inherit; min-height: 24px;
-        }
-        .btn-send {
-            width: 40px; height: 40px; border-radius: 50%;
-            background: #667eea; border: none; color: white;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; transition: all 0.3s; flex-shrink: 0;
-        }
-        .btn-send:active { transform: scale(0.95); }
-        .btn-send:disabled { background: #ccc; }
-        .mic-btn { 
-            width: 48px; height: 48px; border-radius: 50%; 
-            background: #667eea; border: none; color: white; 
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; transition: all 0.3s; position: relative; flex-shrink: 0;
-        }
-        .mic-btn:active { transform: scale(0.95); }
+        .input-container { position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 15px 20px 30px; box-shadow: 0 -5px 30px rgba(0,0,0,0.1); border-radius: 25px 25px 0 0; z-index: 1000; }
+        .input-wrapper { display: flex; align-items: flex-end; gap: 10px; background: #f8f9fa; padding: 10px; border-radius: 25px; }
+        textarea { flex: 1; border: none; background: transparent; font-size: 16px; resize: none; outline: none; max-height: 100px; font-family: inherit; }
+        .btn-send { width: 40px; height: 40px; border-radius: 50%; background: #667eea; border: none; color: white; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .mic-btn { width: 48px; height: 48px; border-radius: 50%; background: #667eea; border: none; color: white; display: flex; align-items: center; justify-content: center; cursor: pointer; }
         .mic-btn.recording { background: #ff6b6b; animation: pulse 1.5s infinite; }
-        @keyframes pulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.4); }
-            50% { box-shadow: 0 0 0 15px rgba(255,107,107,0); }
-        }
-        .recording-hint { 
-            text-align: center; margin-top: 8px; 
-            font-size: 13px; color: #ff6b6b; display: none; 
-        }
-        .recording-hint.active { display: block; }
-        .parsing { 
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.8); color: white; padding: 20px 40px;
-            border-radius: 15px; display: none; z-index: 10000; text-align: center;
-        }
-        .parsing.active { display: block; }
-        .toast {
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.8); color: white; padding: 12px 24px;
-            border-radius: 25px; font-size: 14px; z-index: 10000; display: none;
-        }
-        .toast.show { display: block; animation: fadeIn 0.3s; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .detail-modal {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.5); z-index: 9999; display: none;
-            align-items: flex-end; justify-content: center;
-            padding: 20px; padding-bottom: 100px;
-        }
-        .detail-modal.active { display: flex; }
-        .detail-content {
-            background: white; border-radius: 20px; padding: 25px;
-            width: 100%; max-width: 400px; max-height: 60vh; overflow-y: auto;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        .detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .detail-title { font-size: 20px; font-weight: 600; }
-        .detail-close { width: 36px; height: 36px; border-radius: 50%; background: #f5f5f5; border: none; font-size: 20px; cursor: pointer; }
-        .detail-row { display: flex; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
-        .detail-label { width: 80px; color: #999; font-size: 14px; }
-        .detail-value { flex: 1; color: #333; font-size: 15px; font-weight: 500; }
-        .detail-actions { display: flex; gap: 10px; margin-top: 20px; }
-        .detail-btn { flex: 1; padding: 12px; border-radius: 12px; border: none; font-size: 15px; cursor: pointer; }
-        .detail-btn-primary { background: #ff4d4f; color: white; }
-        .detail-btn-secondary { background: #f5f5f5; color: #666; }
+        @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.4); } 50% { box-shadow: 0 0 0 15px rgba(255,107,107,0); } }
+        .toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 12px 24px; border-radius: 25px; font-size: 14px; z-index: 10000; display: none; }
+        .toast.show { display: block; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>📅 AI日程管家 <span style="font-size: 12px; color: #999; font-weight: normal;">v1.4修复版</span></h1>
-        <p>防重复提交 · 时区修复 · 本地日期存储</p>
+        <h1>📅 AI日程管家 <span style="font-size: 12px; color: #999;">v1.5时间修复版</span></h1>
+        <p>支持"下午/晚上/早上"识别</p>
     </div>
-    
-    <div class="debug-info" id="debugInfo"><strong>调试：</strong><span id="debugText"></span></div>
 
-    <div class="today-summary" id="todaySummary">
-        <div class="today-summary-header">
-            <div>
-                <div class="today-summary-title" id="summaryTitle">日程概览</div>
-                <div class="today-summary-date" id="summaryDate">共 0 项</div>
-            </div>
-            <button class="today-summary-close" onclick="closeSummary()">×</button>
+    <div class="today-summary" id="todaySummary" style="display: none; background: white; margin: 15px; border-radius: 20px; padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <div id="summaryTitle" style="font-size: 18px; font-weight: 600;">日程概览</div>
+            <button onclick="document.getElementById('todaySummary').style.display='none'" style="width: 32px; height: 32px; border-radius: 50%; background: #f5f5f5; border: none;">×</button>
         </div>
-        <div id="summaryContent"><div class="summary-empty">当日无日程</div></div>
+        <div id="summaryContent"></div>
     </div>
 
     <div class="calendar-container">
@@ -244,65 +59,18 @@
         <div class="days" id="calendarDays"></div>
     </div>
 
-    <div class="events-section">
-        <div class="events-header">
-            <div class="events-title" id="eventsTitle">选中日期日程</div>
-            <div class="events-count" id="eventsCount">0 项</div>
-        </div>
-        <div id="eventsList">
-            <div class="empty-state">
-                <div class="empty-state-icon">📝</div>
-                <div>点击日历查看当日日程</div>
-            </div>
-        </div>
-    </div>
-
-    <div class="detail-modal" id="detailModal" onclick="closeDetail(event)">
-        <div class="detail-content" onclick="event.stopPropagation()">
-            <div class="detail-header">
-                <div class="detail-title">日程详情</div>
-                <button class="detail-close" onclick="closeDetail()">×</button>
-            </div>
-            <div class="detail-row"><div class="detail-label">事项</div><div class="detail-value" id="detailTitle">-</div></div>
-            <div class="detail-row"><div class="detail-label">日期</div><div class="detail-value" id="detailDate">-</div></div>
-            <div class="detail-row"><div class="detail-label">时间</div><div class="detail-value" id="detailTime">-</div></div>
-            <div class="detail-row"><div class="detail-label">分类</div><div class="detail-value" id="detailCategory">-</div></div>
-            <div class="detail-row"><div class="detail-label">原始输入</div><div class="detail-value" id="detailRaw" style="font-size: 13px; color: #666;">-</div></div>
-            <div class="detail-actions">
-                <button class="detail-btn detail-btn-secondary" onclick="closeDetail()">关闭</button>
-                <button class="detail-btn detail-btn-primary" onclick="deleteCurrentEvent()">删除日程</button>
-            </div>
-        </div>
-    </div>
-
     <div class="input-container">
-        <div class="status-bar">
-            <div class="status-item"><div class="status-dot" id="speechStatus"></div><span id="speechText">语音检测...</span></div>
-            <div class="status-item"><div class="status-dot active"></div><span>本地存储</span></div>
-        </div>
         <div class="input-wrapper">
-            <textarea id="textInput" rows="1" placeholder="输入日程，回车或点击发送..."></textarea>
-            <button class="btn-send" id="sendBtn" onclick="handleTextSubmit()">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                </svg>
-            </button>
-            <button class="mic-btn" id="micBtn" onmousedown="startRecord()" onmouseup="stopRecord()" ontouchstart="startRecord()" ontouchend="stopRecord()">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-                </svg>
-            </button>
+            <textarea id="textInput" rows="1" placeholder="试试：后天下午5点买菜"></textarea>
+            <button class="btn-send" onclick="handleTextSubmit()">发送</button>
+            <button class="mic-btn" id="micBtn" onmousedown="startRecord()" onmouseup="stopRecord()">🎤</button>
         </div>
-        <div class="recording-hint" id="recordHint">正在聆听，松开后自动解析...</div>
     </div>
 
-    <div class="parsing" id="parsingHint">AI解析中...</div>
     <div class="toast" id="toast"></div>
 
     <script>
-        // ========== 核心修复：本地日期格式化（解决时区Bug） ==========
+        // 核心修复：本地日期格式化
         function formatLocalDate(date) {
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -310,17 +78,14 @@
             return `${year}-${month}-${day}`;
         }
 
-        // ========== 核心修复：防重复提交锁 ==========
-        let isProcessing = false; // 全局处理锁
-        let recordStartTime = 0; // 录音开始时间（防误触）
-
+        let isProcessing = false;
         let events = [];
         let currentDate = new Date();
         let selectedDate = new Date();
         let recognition = null;
         let isRecording = false;
+        let recordStartTime = 0;
         let tempTranscript = '';
-        let currentDetailId = null;
 
         function init() {
             loadEvents();
@@ -342,7 +107,6 @@
                 recordStartTime = Date.now();
                 tempTranscript = '';
                 document.getElementById('micBtn').classList.add('recording');
-                document.getElementById('recordHint').classList.add('active');
             };
             
             recognition.onresult = (e) => {
@@ -357,12 +121,7 @@
             recognition.onend = () => {
                 isRecording = false;
                 document.getElementById('micBtn').classList.remove('recording');
-                document.getElementById('recordHint').classList.remove('active');
-                
-                const duration = Date.now() - recordStartTime;
-                if (duration < 600) return; // 少于600ms视为误触
-                
-                if (tempTranscript.trim() && !isProcessing) {
+                if (Date.now() - recordStartTime > 600 && tempTranscript.trim() && !isProcessing) {
                     document.getElementById('textInput').value = '';
                     parseSchedule(tempTranscript.trim());
                 }
@@ -386,26 +145,20 @@
                     handleTextSubmit();
                 }
             });
-            textarea.addEventListener('input', function() {
-                this.style.height = 'auto';
-                this.style.height = Math.min(this.scrollHeight, 100) + 'px';
-            });
         }
 
         function handleTextSubmit() {
-            if (isProcessing) return showToast('处理中...');
+            if (isProcessing) return;
             const text = document.getElementById('textInput').value.trim();
             if (!text) return;
-            if (text === tempTranscript) return; // 防止语音和文字重复
             parseSchedule(text);
             document.getElementById('textInput').value = '';
         }
 
+        // ========== 核心修复：时间解析（支持下午/晚上/早上） ==========
         function parseSchedule(text) {
             if (isProcessing) return;
             isProcessing = true;
-            document.getElementById('parsingHint').classList.add('active');
-            document.getElementById('sendBtn').disabled = true;
 
             setTimeout(() => {
                 try {
@@ -414,54 +167,71 @@
                         events.push(event);
                         saveEvents();
                         renderCalendar();
-                        showDateSummary(selectedDate);
-                        renderEvents();
-                        showToast('已添加: ' + event.title);
+                        showSummary(event.date);
+                        showToast(`已添加: ${event.title} ${event.time}`);
                     }
                 } catch(e) {
-                    showToast('解析失败');
+                    console.error(e);
                 }
-                
                 isProcessing = false;
                 tempTranscript = '';
-                document.getElementById('parsingHint').classList.remove('active');
-                document.getElementById('sendBtn').disabled = false;
-            }, 500);
+            }, 300);
         }
 
         function extractEvent(text) {
             let date = new Date(selectedDate);
-            let time = '09:00';
+            let hour = 9, minute = 0;
             let title = text;
             let category = '日程';
 
-            // 日期解析
+            // 1. 日期解析
             if (text.includes('今天')) date = new Date();
             else if (text.includes('明天')) { date = new Date(); date.setDate(date.getDate() + 1); }
             else if (text.includes('后天')) { date = new Date(); date.setDate(date.getDate() + 2); }
             else if (text.includes('下周')) { date = new Date(); date.setDate(date.getDate() + 7); }
 
-            // 时间解析
-            const timeMatch = text.match(/(\d{1,2})[:：](\d{2})/);
+            // 2. 时段关键词（下午、晚上、早上、上午）
+            let isPM = false;
+            let isAM = false;
+            
+            if (text.includes('下午') || text.includes('晚上')) isPM = true;
+            if (text.includes('上午') || text.includes('早上')) isAM = true;
+
+            // 3. 时间数字解析（支持"5点"、"5:00"、"5点30分"等）
+            // 匹配模式：数字+点/时，可选的+数字+分，或数字:数字
+            let timeMatch = text.match(/(\d{1,2})\s*[点:：时]\s*(\d{1,2})?\s*[分]?/);
+            
             if (timeMatch) {
-                time = `${timeMatch[1].padStart(2,'0')}:${timeMatch[2]}`;
+                hour = parseInt(timeMatch[1]);
+                minute = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+                
+                // 处理12小时制转换
+                if (isPM && hour < 12) hour += 12;      // 下午5点 → 17点
+                if (isAM && hour === 12) hour = 0;      // 凌晨12点 → 0点（特殊情况）
+                
+                // 限制范围
+                if (hour > 23) hour = 23;
+                if (minute > 59) minute = 59;
             }
 
-            // 清理标题
-            title = text.replace(/今天|明天|后天|下周|\d+[号日]|\d+[:：点]\d*/g, '').trim() || '新日程';
-            
-            // 分类
+            // 4. 清理标题（移除时间词）
+            title = text.replace(/今天|明天|后天|下周|\d+[号日]|(上午|下午|晚上|早上)?\s*\d{1,2}\s*[点:：时]\s*\d{0,2}\s*[分]?/g, '').trim();
+            if (!title) title = '新日程';
+
+            // 5. 分类
             if (text.includes('会')) category = '会议';
-            else if (text.includes('饭') || text.includes('吃')) category = '餐饮';
-            else if (text.includes('机') || text.includes('车')) category = '出行';
+            else if (text.includes('买') || text.includes('吃')) category = '生活';
+
+            const timeStr = `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+            
+            console.log('解析结果:', text, '→', formatLocalDate(date), timeStr); // 调试用
 
             return {
                 id: Date.now(),
                 title: title,
                 date: formatLocalDate(date),
-                time: time,
+                time: timeStr,
                 category: category,
-                duration: '60分钟',
                 raw: text
             };
         }
@@ -472,22 +242,20 @@
             
             const firstDay = new Date(year, month, 1).getDay();
             const daysInMonth = new Date(year, month + 1, 0).getDate();
-            const daysInPrevMonth = new Date(year, month, 0).getDate();
-            
             let html = '';
+            
             for (let i = firstDay - 1; i >= 0; i--) {
-                html += `<div class="day other-month"><span class="day-num">${daysInPrevMonth - i}</span></div>`;
+                html += `<div class="day" style="color:#ccc">${new Date(year, month, 0).getDate() - i}</div>`;
             }
             
-            const today = new Date();
             for (let i = 1; i <= daysInMonth; i++) {
                 const d = new Date(year, month, i);
                 const dateStr = formatLocalDate(d);
                 const hasEvent = events.some(e => e.date === dateStr);
                 const isActive = formatLocalDate(selectedDate) === dateStr;
-                const isToday = formatLocalDate(today) === dateStr;
+                const isToday = formatLocalDate(new Date()) === dateStr;
                 
-                html += `<div class="day ${isActive ? 'active' : ''} ${hasEvent ? 'has-event' : ''} ${isToday ? 'today' : ''}" onclick="selectDate(${year}, ${month}, ${i})"><span class="day-num">${i}</span></div>`;
+                html += `<div class="day ${isActive ? 'active' : ''} ${hasEvent ? 'has-event' : ''} ${isToday ? 'today' : ''}" onclick="selectDate(${year}, ${month}, ${i})">${i}</div>`;
             }
             
             document.getElementById('calendarDays').innerHTML = html;
@@ -496,104 +264,40 @@
         function selectDate(year, month, day) {
             selectedDate = new Date(year, month, day);
             renderCalendar();
-            showDateSummary(selectedDate);
-            renderEvents();
+            showSummary(formatLocalDate(selectedDate));
         }
 
-        function showDateSummary(date) {
-            const dateStr = formatLocalDate(date);
+        function showSummary(dateStr) {
             const dayEvents = events.filter(e => e.date === dateStr).sort((a, b) => a.time.localeCompare(b.time));
-            
-            document.getElementById('summaryTitle').textContent = `${date.getMonth()+1}月${date.getDate()}日 日程`;
-            document.getElementById('summaryDate').textContent = `共 ${dayEvents.length} 项`;
-            
+            const summary = document.getElementById('todaySummary');
             const content = document.getElementById('summaryContent');
+            
+            document.getElementById('summaryTitle').textContent = dateStr + ' 日程';
+            
             if (dayEvents.length === 0) {
-                content.innerHTML = '<div class="summary-empty">当日暂无日程</div>';
+                content.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">无日程</div>';
             } else {
                 content.innerHTML = dayEvents.map(e => `
-                    <div class="summary-event-item" onclick="showDetail(${e.id})">
-                        <div class="summary-time">${e.time}</div>
-                        <div class="summary-content"><h4>${e.title}</h4><p>${e.category}</p></div>
+                    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #f0f0f0;">
+                        <div style="background:#667eea;color:white;padding:6px 10px;border-radius:8px;">${e.time}</div>
+                        <div>${e.title}</div>
                     </div>
                 `).join('');
             }
-            document.getElementById('todaySummary').classList.add('active');
-        }
-
-        function closeSummary() {
-            document.getElementById('todaySummary').classList.remove('active');
-        }
-
-        function renderEvents() {
-            const dateStr = formatLocalDate(selectedDate);
-            const dayEvents = events.filter(e => e.date === dateStr);
-            
-            document.getElementById('eventsTitle').textContent = `${selectedDate.getMonth()+1}月${selectedDate.getDate()}日 日程`;
-            document.getElementById('eventsCount').textContent = `${dayEvents.length} 项`;
-            
-            const container = document.getElementById('eventsList');
-            if (dayEvents.length === 0) {
-                container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📝</div><div>点击下方输入日程</div></div>`;
-            } else {
-                container.innerHTML = dayEvents.map(e => `
-                    <div class="event-card" onclick="showDetail(${e.id})">
-                        <div class="event-time">${e.time}</div>
-                        <div class="event-content"><h3>${e.title}</h3><p>${e.category} · 60分钟</p></div>
-                        <div class="event-arrow">›</div>
-                    </div>
-                `).join('');
-            }
+            summary.style.display = 'block';
         }
 
         function changeMonth(delta) {
             currentDate.setMonth(currentDate.getMonth() + delta);
             renderCalendar();
-            closeSummary();
-        }
-
-        function showDetail(id) {
-            const e = events.find(x => x.id === id);
-            if (!e) return;
-            currentDetailId = id;
-            document.getElementById('detailTitle').textContent = e.title;
-            document.getElementById('detailDate').textContent = e.date;
-            document.getElementById('detailTime').textContent = e.time;
-            document.getElementById('detailCategory').textContent = e.category;
-            document.getElementById('detailRaw').textContent = e.raw;
-            document.getElementById('detailModal').classList.add('active');
-        }
-
-        function closeDetail(e) {
-            if (!e || e.target.id === 'detailModal') {
-                document.getElementById('detailModal').classList.remove('active');
-                currentDetailId = null;
-            }
-        }
-
-        function deleteCurrentEvent() {
-            if (!currentDetailId || !confirm('确定删除？')) return;
-            events = events.filter(e => e.id !== currentDetailId);
-            saveEvents();
-            renderCalendar();
-            renderEvents();
-            showDateSummary(selectedDate);
-            closeDetail();
-            showToast('已删除');
         }
 
         function saveEvents() {
-            // 去重保存
-            const unique = [];
-            const seen = new Set();
-            for (const e of events) {
-                if (!seen.has(e.id)) { seen.add(e.id); unique.push(e); }
-            }
-            localStorage.setItem('schedule_v14', JSON.stringify(unique));
+            localStorage.setItem('schedule_v15', JSON.stringify(events));
         }
 
         function loadEvents() {
-            const saved = localStorage.getItem('schedule_v14');
+            const saved = localStorage.getItem('schedule_v15');
             if (saved) events = JSON.parse(saved);
         }
 
