@@ -2,15 +2,12 @@ name = "schedule-api"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
-# 绑定 D1 数据库
 [[d1_databases]]
 binding = "DB"
 database_name = "schedule_pro_db"
-# 注意：把下面这行改成你刚才记录的数据库ID
 database_id = "d647746c-e870-44c8-8678-df3152e2fc33"
 
 [vars]
-# 这些变量可以在 Cloudflare Dashboard 里设置，更安全
-# GITHUB_CLIENT_ID = "你的GitHub Client ID"
-# GITHUB_CLIENT_SECRET = "你的GitHub Client Secret"
-# JWT_SECRET = "你的随机字符串（越复杂越好）"
+SENDER_EMAIL = "noreply@boluomate.com"
+# 以下变量在 Cloudflare Dashboard 或 wrangler secret 中设置：
+# JWT_SECRET = "你的随机密钥（至少32位）"

@@ -14,7 +14,7 @@ const nextConfig = withPWA({
   images: { unoptimized: true },
   // Cloudflare Pages 配置
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'https://schedule-api.yourdomain.com',
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'https://schedule-api.boluomate.com',
   },
 });
 
