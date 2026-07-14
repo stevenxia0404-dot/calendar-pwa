@@ -12,7 +12,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#667eea',
+  themeColor: '#F7F5F2',
 };
 
 export default function RootLayout({
@@ -22,7 +22,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className="min-h-screen bg-gradient-to-br from-indigo-500 to-purple-600">
+      <body className="min-h-screen bg-[#F7F5F2]">
         {children}
       </body>
     </html>
