@@ -142,9 +142,14 @@ export default function Home() {
 
   const isOnline = !!user && !!token;
 
+  // 避免静态导出预渲染与客户端 hydration 不一致（日期 / localStorage）
+  const [mounted, setMounted] = useState(false);
+
   // ==================== 初始化 ====================
 
   useEffect(() => {
+    setMounted(true);
+
     const saved = localStorage.getItem('schedule_events');
     if (saved) { try { setEvents(JSON.parse(saved)); } catch { /* ignore */ } }
 
@@ -437,6 +442,24 @@ export default function Home() {
   const weekDays = ['一', '二', '三', '四', '五', '六', '日'];
 
   // ==================== UI ====================
+
+  // 客户端挂载前渲染静态骨架，确保服务端与客户端首帧一致，避免 hydration 报错
+  if (!mounted) {
+    return (
+      <main className="min-h-screen pb-44 bg-[#F7F5F2]">
+        <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
+          <div className="flex justify-between items-center max-w-lg mx-auto">
+            <div>
+              <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
+                <Calendar className="w-5 h-5 text-[#ED6A3B]" /> AI日程管家
+              </h1>
+              <p className="text-xs text-[#A0A0A0] mt-0.5">加载中…</p>
+            </div>
+          </div>
+        </header>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen pb-44 bg-[#F7F5F2]">
