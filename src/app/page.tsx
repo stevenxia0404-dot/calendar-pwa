@@ -447,7 +447,7 @@ export default function Home() {
   if (!mounted) {
     return (
       <main className="min-h-screen pb-44 bg-[#F7F5F2]">
-        <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
+        <header className="bg-[#FAFAF9] px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
           <div className="flex justify-between items-center max-w-lg mx-auto">
             <div>
               <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
@@ -464,7 +464,7 @@ export default function Home() {
   return (
     <main className="min-h-screen pb-44 bg-[#F7F5F2]">
       {/* Header */}
-      <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
+      <header className="bg-[#FAFAF9] px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
         <div className="flex justify-between items-center max-w-lg mx-auto">
           <div>
             <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
