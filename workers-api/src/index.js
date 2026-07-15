@@ -374,6 +374,7 @@ export default {
           'CALSCALE:GREGORIAN',
           'METHOD:PUBLISH',
           'X-WR-CALNAME:菠萝日程',
+          'REFRESH-INTERVAL;VALUE=DURATION:PT15M',
         ];
 
         for (const e of (evts || [])) {
@@ -396,6 +397,7 @@ export default {
           headers: {
             'Content-Type': 'text/calendar; charset=utf-8',
             'Content-Disposition': 'inline; filename="schedule.ics"',
+            'Cache-Control': 'public, max-age=900',
             ...headers,
           },
         });
