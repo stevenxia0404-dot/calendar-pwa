@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Mic, Send, Calendar, ChevronLeft, ChevronRight, Download, LogOut, RefreshCw, Mail } from 'lucide-react';
+import { Mic, Send, ChevronLeft, ChevronRight, Download, LogOut, RefreshCw, Mail } from 'lucide-react';
 
 // ==================== 配置 ====================
 
@@ -512,7 +512,7 @@ export default function Home() {
       <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
         <div className="flex justify-between items-center max-w-md mx-auto">
           <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
-            <Calendar className="w-5 h-5 text-[#ED6A3B]" /> 菠萝日程
+            <img src="/favicon.ico" alt="" className="w-5 h-5" /> 菠萝日程
           </h1>
           <div className="flex items-center gap-1">
             <div className="relative group">
