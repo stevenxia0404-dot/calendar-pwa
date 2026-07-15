@@ -139,11 +139,77 @@ export default {
         'SELECT id, email, text, created_at FROM feedback ORDER BY created_at DESC LIMIT 100'
       ).all();
 
-      const rows = (results || []).map(r =>
-        `<tr><td style="padding:8px;border:1px solid #ddd">${r.id}</td><td style="padding:8px;border:1px solid #ddd">${r.email || '-'}</td><td style="padding:8px;border:1px solid #ddd">${r.text}</td><td style="padding:8px;border:1px solid #ddd">${r.created_at}</td></tr>`
-      ).join('');
+      const rows = (results || []).map(r => {
+        const t = new Date(r.created_at + 'Z');
+        const ts = t.toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+        return `<tr class="row">
+          <td class="cell email">${r.email || '-'}</td>
+          <td class="cell text">${r.text.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+          <td class="cell time">${ts}</td>
+        </tr>`;
+      }).join('');
 
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>菠萝日程 - 反馈管理</title></head><body style="font-family:sans-serif;max-width:900px;margin:40px auto;padding:0 20px"><h1>反馈管理</h1><table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f5f5f5"><th style="padding:8px;border:1px solid #ddd">ID</th><th style="padding:8px;border:1px solid #ddd">邮箱</th><th style="padding:8px;border:1px solid #ddd">内容</th><th style="padding:8px;border:1px solid #ddd">时间</th></tr></thead><tbody>${rows}</tbody></table><p style="color:#999;margin-top:20px">共 ${(results || []).length} 条反馈</p></body></html>`;
+      const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>菠萝日程 - 反馈管理</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; background: #F7F5F2; color: #1C1C1C; min-height: 100vh; }
+  .header { background: #fff; border-bottom: 1px solid #E8E4DF; padding: 16px 20px; position: sticky; top: 0; z-index: 10; }
+  .header-inner { max-width: 900px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand img { width: 28px; height: 28px; border-radius: 6px; }
+  .brand h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+  .brand span { font-size: 13px; color: #A0A0A0; font-weight: 400; }
+  .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .stat { background: #fff; border-radius: 12px; padding: 14px 20px; margin-bottom: 16px; border: 1px solid #E8E4DF; display: flex; align-items: center; gap: 8px; font-size: 14px; color: #5C5C5C; }
+  .stat strong { color: #ED6A3B; font-size: 20px; }
+  .card { background: #fff; border-radius: 12px; border: 1px solid #E8E4DF; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  th { font-size: 12px; font-weight: 500; color: #A0A0A0; text-align: left; padding: 12px 16px; background: #FAFAF8; border-bottom: 1px solid #E8E4DF; text-transform: uppercase; letter-spacing: 0.5px; }
+  .row { border-bottom: 1px solid #F3F1ED; }
+  .row:last-child { border-bottom: none; }
+  .cell { padding: 12px 16px; font-size: 14px; vertical-align: top; }
+  .cell.email { width: 180px; color: #5C5C5C; word-break: break-all; }
+  .cell.text { color: #1C1C1C; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .cell.time { width: 100px; color: #A0A0A0; font-size: 13px; white-space: nowrap; }
+  .empty { text-align: center; padding: 48px 20px; color: #A0A0A0; font-size: 14px; }
+  .footer { text-align: center; padding: 24px; color: #A0A0A0; font-size: 12px; }
+  @media (max-width: 640px) {
+    .cell.email { width: auto; }
+    .cell.time { width: auto; }
+    th, .cell { padding: 10px 12px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<header class="header">
+  <div class="header-inner">
+    <div class="brand">
+      <img src="https://schedule.boluomate.com/favicon.ico" alt="">
+      <h1>菠萝日程 <span>· 反馈管理</span></h1>
+    </div>
+    <div style="font-size:13px;color:#A0A0A0;">${new Date().toLocaleDateString('zh-CN')}</div>
+  </div>
+</header>
+<div class="container">
+  <div class="stat">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ED6A3B" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z"/></svg>
+    共 <strong>${(results || []).length}</strong> 条反馈
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>邮箱</th><th>内容</th><th>时间</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" class="empty">暂无反馈</td></tr>'}</tbody>
+    </table>
+  </div>
+  <div class="footer">菠萝日程 · 反馈管理后台</div>
+</div>
+</body>
+</html>`;
       return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
