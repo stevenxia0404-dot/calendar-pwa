@@ -550,12 +550,11 @@ export default function Home() {
 
       {/* Header */}
       <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
-        <div className="flex justify-between items-end max-w-md mx-auto">
-          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-end gap-2 tracking-tight">
+        <div className="flex justify-between items-center max-w-md mx-auto">
+          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
             <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
-            <span className="text-[10px] font-normal text-[#C0BDB8] pb-0.5">v1.0</span>
           </h1>
-          <div className="flex items-end gap-1">
+          <div className="flex items-center gap-1">
             <div className="relative group">
               <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${isOnline ? 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]' : 'bg-[#D9D4CF]'}`} />
               <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-[60] shadow-lg">
@@ -723,7 +722,7 @@ export default function Home() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
           <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-5">
-              <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明</h2>
+              <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明 <span className="text-[10px] font-normal text-[#C0BDB8]">v1.0</span></h2>
               <button onClick={() => setShowHelp(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center transition-colors">&times;</button>
             </div>
 
