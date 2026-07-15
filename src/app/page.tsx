@@ -511,8 +511,8 @@ export default function Home() {
       {/* Header */}
       <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
         <div className="flex justify-between items-center max-w-md mx-auto">
-          <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
-            <img src="/icon-192x192.png" alt="" className="w-5 h-5 rounded" /> 菠萝日程
+          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
+            <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
           </h1>
           <div className="flex items-center gap-1">
             <div className="relative group">
