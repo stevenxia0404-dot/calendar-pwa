@@ -521,27 +521,27 @@ export default function Home() {
     <main className="min-h-screen pb-44 bg-[#F7F5F2] flex flex-col">
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
-        <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm" onClick={dismissVersionModal}>
-          <div className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:max-w-sm p-8 shadow-lg animate-slide-up" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-7">
-              <img src="/icon-192x192.png" alt="" className="w-10 h-10 rounded-lg" />
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>
+          <div className="bg-white rounded-2xl w-full max-w-xs p-6 shadow-lg animate-slide-up" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2.5 mb-5">
+              <img src="/icon-192x192.png" alt="" className="w-8 h-8 rounded-lg" />
               <div>
-                <h2 className="text-xl font-bold text-[#1C1C1C] leading-tight">菠萝日程</h2>
-                <span className="text-sm font-semibold text-[#ED6A3B]">v1.0</span>
+                <h2 className="text-lg font-bold text-[#1C1C1C] leading-tight">菠萝日程</h2>
+                <span className="text-xs font-semibold text-[#ED6A3B]">v1.0</span>
               </div>
             </div>
 
-            <div className="space-y-4 mb-8 text-sm text-[#5C5C5C]">
-              <div className="flex gap-3"><span className="text-base shrink-0">快速记录</span><span className="text-[#A0A0A0]">自然语言输入，支持中文数字 · 换行多日程</span></div>
-              <div className="flex gap-3"><span className="text-base shrink-0">语音输入</span><span className="text-[#A0A0A0]">按住说话松开发送，滑动取消</span></div>
-              <div className="flex gap-3"><span className="text-base shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱隐形激活 · 30 秒自动同步</span></div>
-              <div className="flex gap-3"><span className="text-base shrink-0">苹果日历</span><span className="text-[#A0A0A0]">扫码订阅 · 15 分钟自动刷新</span></div>
-              <div className="flex gap-3"><span className="text-base shrink-0">桌面应用</span><span className="text-[#A0A0A0]">添加到主屏幕，像 App 一样打开</span></div>
-              <div className="flex gap-3"><span className="text-base shrink-0">反馈建议</span><span className="text-[#A0A0A0]">弹窗提交 · 后台查看</span></div>
+            <div className="space-y-3 mb-6 text-xs text-[#5C5C5C]">
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">快速记录</span><span className="text-[#A0A0A0]">自然语言输入，支持中文数字 · 换行多日程</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">语音输入</span><span className="text-[#A0A0A0]">按住说话松开发送，滑动取消</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱隐形激活 · 30 秒自动同步</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">苹果日历</span><span className="text-[#A0A0A0]">扫码订阅 · 15 分钟自动刷新</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">桌面应用</span><span className="text-[#A0A0A0]">添加到主屏幕，像 App 一样打开</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">反馈建议</span><span className="text-[#A0A0A0]">弹窗提交 · 后台查看</span></div>
             </div>
 
             <button onClick={dismissVersionModal}
-              className="w-full h-12 bg-[#1C1C1C] text-white rounded-xl text-sm font-semibold hover:bg-[#333] transition-colors">
+              className="w-full h-11 bg-[#1C1C1C] text-white rounded-xl text-sm font-semibold hover:bg-[#333] transition-colors">
               开始使用
             </button>
           </div>
