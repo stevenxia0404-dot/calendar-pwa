@@ -491,7 +491,7 @@ export default function Home() {
     for (let i = 1; i <= daysInMonth; i++) {
       const d = new Date(year, month, i);
       const ds = formatLocalDate(d);
-      const has = events.some(e => e.date === ds);
+      const has = isOnline && events.some(e => e.date === ds);
       const active = formatLocalDate(selectedDate) === ds;
       const isToday = formatLocalDate(today) === ds;
 
@@ -509,7 +509,7 @@ export default function Home() {
     return days;
   };
 
-  const dayEvents = detailDate
+  const dayEvents = (detailDate && isOnline)
     ? events.filter(e => e.date === detailDate).sort((a, b) => a.time.localeCompare(b.time))
     : [];
 
@@ -553,6 +553,7 @@ export default function Home() {
         <div className="flex justify-between items-center max-w-md mx-auto">
           <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
             <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
+            <span className="text-[10px] font-normal text-[#C0BDB8] -ml-1">v1.0</span>
           </h1>
           <div className="flex items-center gap-1">
             <div className="relative group">
@@ -779,7 +780,9 @@ export default function Home() {
             </button>
           </div>
           {dayEvents.length === 0 ? (
-            <p className="text-[#A0A0A0] text-center py-8 text-sm">暂无日程，在下方输入</p>
+            <p className="text-[#A0A0A0] text-center py-8 text-sm">
+              {isOnline ? '暂无日程，在下方输入' : '点击右上角激活同步后可查看日程'}
+            </p>
           ) : (
             <div className="space-y-3">
               {dayEvents.map(e => (
