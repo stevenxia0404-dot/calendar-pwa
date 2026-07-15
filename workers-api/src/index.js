@@ -417,7 +417,7 @@ export default {
 
         if (since) {
           query += ' AND updated_at > ?';
-          params.push(since);
+          params.push(parseInt(since, 10) || 0);
         }
 
         query += ' ORDER BY date, time';

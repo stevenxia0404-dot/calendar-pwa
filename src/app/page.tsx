@@ -22,26 +22,22 @@ function extractTime(text: string) {
   let matched = false;
 
   // 中文数字→阿拉伯数字
-  const cnNum: Record<string, number> = { '零':0, '一':1, '二':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10 };
+  const cnNum: Record<string, number> = { '零':0, '一':1, '二':2, '两':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10 };
   function toNum(s: string): number {
     if (/^\d+$/.test(s)) return parseInt(s);
     if (s.length === 1) return cnNum[s] ?? 0;
-    if (s === '十') return 10;
     if (s.startsWith('十')) return 10 + (cnNum[s[1]] ?? 0);
     if (s.endsWith('十')) return (cnNum[s[0]] ?? 0) * 10;
     const [a, b] = s.split('十');
     return (cnNum[a] ?? 0) * 10 + (cnNum[b] ?? 0);
   }
 
-  let m = text.match(/([\d一二三四五六七八九十]{1,3})\s*点(?:\s*([\d一二两半]+)\s*([分刻]?))?/);
+  let m = text.match(/([\d一二三四五六七八九十两零]{1,3})\s*点(?:\s*([\d零一二三四五六七八九十两半]+)\s*([分刻]?))?/);
   if (m) {
     hour = toNum(m[1]);
     if (m[2] === '半') minute = 30;
-    else if (m[2] === '两') minute = 2;
-    else if (m[2]) {
-      minute = toNum(m[2]);
-      if (m[3] === '刻') minute = Math.min(minute * 15, 59);
-    }
+    else if (m[3] === '刻') minute = Math.min(toNum(m[2]) * 15, 59);
+    else if (m[2]) minute = toNum(m[2]);
     matched = true;
   } else {
     m = text.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
@@ -265,7 +261,7 @@ export default function Home() {
         }
         return Array.from(map.values());
       });
-      localStorage.setItem('schedule_last_sync', new Date().toISOString());
+      localStorage.setItem('schedule_last_sync', String(Date.now()));
     } catch { /* 静默失败 */ }
     finally { setIsSyncing(false); }
   };
