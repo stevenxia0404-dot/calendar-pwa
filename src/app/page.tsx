@@ -550,12 +550,12 @@ export default function Home() {
 
       {/* Header */}
       <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
-        <div className="flex justify-between items-center max-w-md mx-auto">
-          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
+        <div className="flex justify-between items-end max-w-md mx-auto">
+          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-end gap-2 tracking-tight">
             <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
-            <span className="text-[10px] font-normal text-[#C0BDB8] -ml-1">v1.0</span>
+            <span className="text-[10px] font-normal text-[#C0BDB8] pb-0.5">v1.0</span>
           </h1>
-          <div className="flex items-center gap-1">
+          <div className="flex items-end gap-1">
             <div className="relative group">
               <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${isOnline ? 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]' : 'bg-[#D9D4CF]'}`} />
               <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-[60] shadow-lg">
