@@ -21,9 +21,27 @@ function extractTime(text: string) {
   let hour = 9, minute = 0;
   let matched = false;
 
-  let m = text.match(/(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分?)?/);
+  // 中文数字→阿拉伯数字
+  const cnNum: Record<string, number> = { '零':0, '一':1, '二':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10 };
+  function toNum(s: string): number {
+    if (/^\d+$/.test(s)) return parseInt(s);
+    if (s.length === 1) return cnNum[s] ?? 0;
+    if (s === '十') return 10;
+    if (s.startsWith('十')) return 10 + (cnNum[s[1]] ?? 0);
+    if (s.endsWith('十')) return (cnNum[s[0]] ?? 0) * 10;
+    const [a, b] = s.split('十');
+    return (cnNum[a] ?? 0) * 10 + (cnNum[b] ?? 0);
+  }
+
+  let m = text.match(/([\d一二三四五六七八九十]{1,3})\s*点(?:\s*([\d一二两半]+)\s*([分刻]?))?/);
   if (m) {
-    hour = parseInt(m[1]); if (m[2]) minute = parseInt(m[2]);
+    hour = toNum(m[1]);
+    if (m[2] === '半') minute = 30;
+    else if (m[2] === '两') minute = 2;
+    else if (m[2]) {
+      minute = toNum(m[2]);
+      if (m[3] === '刻') minute = Math.min(minute * 15, 59);
+    }
     matched = true;
   } else {
     m = text.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
