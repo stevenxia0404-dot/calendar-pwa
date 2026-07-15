@@ -707,7 +707,12 @@ export default function Home() {
             <div className="space-y-5">
               <div>
                 <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">快速记录</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">直接输入自然语言，如「<span className="text-[#ED6A3B]">后天下午3点买菜</span>」「<span className="text-[#ED6A3B]">本周五上午10点开会</span>」，回车即保存。日期、时间自动识别。</p>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">直接输入自然语言，如「<span className="text-[#ED6A3B]">后天下午3点买菜</span>」「<span className="text-[#ED6A3B]">本周五上午10点开会</span>」，回车即保存。日期、时间自动识别。<br /><span className="text-xs text-[#A0A0A0]">支持换行分隔，一次输入多个日程</span></p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">添加到桌面</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">iPhone Safari 点分享按钮 → 添加到主屏幕<br />Android Chrome 点菜单 → 添加到主屏幕<br /><span className="text-xs text-[#A0A0A0]">添加后像 App 一样打开，体验更流畅</span></p>
               </div>
 
               <div>
