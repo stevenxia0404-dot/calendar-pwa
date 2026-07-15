@@ -189,7 +189,7 @@ export default {
 <header class="header">
   <div class="header-inner">
     <div class="brand">
-      <img src="https://schedule.boluomate.com/favicon.ico" alt="">
+      <img src="https://schedule.boluomate.com/icon-192x192.png" alt="">
       <h1>菠萝日程 <span>· 反馈管理</span></h1>
     </div>
     <div style="font-size:13px;color:#A0A0A0;">${new Date().toLocaleDateString('zh-CN')}</div>
