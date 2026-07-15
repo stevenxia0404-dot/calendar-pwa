@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'AI日程管家',
-  description: '语音智能日程管理',
+  title: '菠萝日程',
+  description: '语音智能日程管理 · 多设备自动同步',
   manifest: '/manifest.json',
 };
 

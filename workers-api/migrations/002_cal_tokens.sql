@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS cal_tokens (
+  user_id INTEGER PRIMARY KEY,
+  token TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);

@@ -1,4 +1,4 @@
-// AI日程管家 - Cloudflare Workers API v0.4.0
+// 菠萝日程 - Cloudflare Workers API v0.4.1
 // 邮箱验证码认证 + JWT + D1 数据库
 
 // ==================== JWT 工具 ====================
@@ -96,7 +96,7 @@ async function sendEmail(to, subject, body, env) {
       'Authorization': `Bearer ${env.RESEND_API_KEY}`,
     },
     body: JSON.stringify({
-      from: `AI日程管家 <${sender}>`,
+      from: `菠萝日程 <${sender}>`,
       to: [to],
       subject,
       text: body,
@@ -130,6 +130,23 @@ export default {
       return new Response(null, { status: 204, headers });
     }
 
+    // 管理页面：查看反馈
+    if (path === '/' && method === 'GET') {
+      const key = url.searchParams.get('key');
+      if (key !== 'boluomate2026') return json({ error: 'Unauthorized' }, 401, headers);
+
+      const { results } = await env.DB.prepare(
+        'SELECT id, email, text, created_at FROM feedback ORDER BY created_at DESC LIMIT 100'
+      ).all();
+
+      const rows = (results || []).map(r =>
+        `<tr><td style="padding:8px;border:1px solid #ddd">${r.id}</td><td style="padding:8px;border:1px solid #ddd">${r.email || '-'}</td><td style="padding:8px;border:1px solid #ddd">${r.text}</td><td style="padding:8px;border:1px solid #ddd">${r.created_at}</td></tr>`
+      ).join('');
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>菠萝日程 - 反馈管理</title></head><body style="font-family:sans-serif;max-width:900px;margin:40px auto;padding:0 20px"><h1>反馈管理</h1><table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f5f5f5"><th style="padding:8px;border:1px solid #ddd">ID</th><th style="padding:8px;border:1px solid #ddd">邮箱</th><th style="padding:8px;border:1px solid #ddd">内容</th><th style="padding:8px;border:1px solid #ddd">时间</th></tr></thead><tbody>${rows}</tbody></table><p style="color:#999;margin-top:20px">共 ${(results || []).length} 条反馈</p></body></html>`;
+      return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+
     try {
       // ===== 认证路由 =====
 
@@ -156,8 +173,8 @@ export default {
           'INSERT INTO verification_codes (email, code) VALUES (?, ?)'
         ).bind(email, code).run();
 
-        const result = await sendEmail(email, 'AI日程管家 - 验证码',
-          `你的验证码是：${code}\n\n5分钟内有效。\n\n如果你没有在AI日程管家注册，请忽略此邮件。`, env);
+        const result = await sendEmail(email, '菠萝日程 - 验证码',
+          `你的验证码是：${code}\n\n5分钟内有效。\n\n如果你没有在菠萝日程注册，请忽略此邮件。`, env);
 
         if (!result.ok) {
           let detail = result.error;
@@ -204,7 +221,7 @@ export default {
       // 获取当前用户
       if (path === '/auth/me' && method === 'GET') {
         const payload = await requireAuth(request, env);
-        if (!payload) return json({ error: '未登录' }, 401, headers);
+        if (!payload) return json({ error: '尚未激活同步，你的数据很安全' }, 401, headers);
 
         const user = await env.DB.prepare(
           'SELECT id, email, created_at FROM users WHERE id = ?'
@@ -217,11 +234,104 @@ export default {
       // 删除账号
       if (path === '/auth/account' && method === 'DELETE') {
         const payload = await requireAuth(request, env);
-        if (!payload) return json({ error: '未登录' }, 401, headers);
+        if (!payload) return json({ error: '尚未激活同步，你的数据很安全' }, 401, headers);
 
         await env.DB.prepare('DELETE FROM events WHERE user_id = ?').bind(payload.userId).run();
         await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(payload.userId).run();
         return json({ ok: true }, 200, headers);
+      }
+
+      // 反馈提交（无需登录，保护隐私）
+      if (path === '/feedback' && method === 'POST') {
+        const { text, email } = await request.json();
+        if (!text || !text.trim()) return json({ error: '请输入反馈内容' }, 400, headers);
+        const uid = (await requireAuth(request, env))?.userId || null;
+        await env.DB.prepare('INSERT INTO feedback (user_id, email, text) VALUES (?, ?, ?)')
+          .bind(uid, email || '', text.trim().slice(0, 500)).run();
+        return json({ ok: true }, 200, headers);
+      }
+
+      // iCalendar 订阅（无需登录，使用 cal_token 或 test 模式）
+      if (path === '/events/ical' && method === 'GET') {
+        const calToken = url.searchParams.get('token');
+
+        if (calToken === 'test') {
+          const testIcal = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//菠萝日程//test//',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH',
+            'X-WR-CALNAME:菠萝日程测试',
+            'BEGIN:VEVENT',
+            'DTSTART:20260715T090000Z',
+            'DTEND:20260715T100000Z',
+            'SUMMARY:测试日程',
+            'DESCRIPTION:这是一个测试事件',
+            'UID:test-123',
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ].join('\r\n');
+          return new Response(testIcal, {
+            status: 200,
+            headers: { 'Content-Type': 'text/calendar; charset=utf-8', ...headers },
+          });
+        }
+
+        if (!calToken) return json({ error: 'Missing token' }, 401, headers);
+
+        const row = await env.DB.prepare(
+          'SELECT user_id FROM cal_tokens WHERE token = ?'
+        ).bind(calToken).first();
+
+        if (!row) return json({ error: 'Invalid token' }, 401, headers);
+
+        const { results: evts } = await env.DB.prepare(
+          'SELECT title, date, time, raw FROM events WHERE user_id = ? ORDER BY date, time'
+        ).bind(row.user_id).all();
+
+        const toUTC = (d, t) => {
+          const [h, m] = (t || '09:00').split(':');
+          return `${d.replace(/-/g, '')}T${h.padStart(2,'0')}${m}00`;
+        };
+        const addHour = (dt) => {
+          const y = parseInt(dt.slice(0,4)), mo = parseInt(dt.slice(4,6))-1, da = parseInt(dt.slice(6,8)),
+                hh = parseInt(dt.slice(9,11)), mm = parseInt(dt.slice(11,13));
+          const d = new Date(y, mo, da, hh+1, mm);
+          return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}00`;
+        };
+
+        const lines = [
+          'BEGIN:VCALENDAR',
+          'VERSION:2.0',
+          'PRODID:-//菠萝日程//schedule.boluomate.com//',
+          'CALSCALE:GREGORIAN',
+          'METHOD:PUBLISH',
+          'X-WR-CALNAME:菠萝日程',
+        ];
+
+        for (const e of (evts || [])) {
+          const dt = toUTC(e.date, e.time);
+          lines.push(
+            'BEGIN:VEVENT',
+            `DTSTART:${dt}`,
+            `DTEND:${addHour(dt)}`,
+            `SUMMARY:${e.title.replace(/[,;\\]/g, '\\$&')}`,
+            `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
+            `UID:${crypto.randomUUID()}`,
+            'END:VEVENT'
+          );
+        }
+
+        lines.push('END:VCALENDAR');
+        return new Response(lines.join('\r\n'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/calendar; charset=utf-8',
+            'Content-Disposition': 'inline; filename="schedule.ics"',
+            ...headers,
+          },
+        });
       }
 
       // ===== 日程 API（以下都需要登录） =====
@@ -327,6 +437,21 @@ export default {
           .bind(eventId, userId).run();
 
         return json({ ok: true }, 200, headers);
+      }
+
+      // 生成日历订阅 token（简化版，无 JWT 编码问题）
+      if (path === '/auth/cal-token' && method === 'GET') {
+        const payload = await requireAuth(request, env);
+        if (!payload) return json({ error: '尚未激活同步，你的数据很安全' }, 401, headers);
+
+        // 删除旧 token
+        await env.DB.prepare('DELETE FROM cal_tokens WHERE user_id = ?').bind(payload.userId).run();
+        // 生成新 token
+        const calToken = crypto.randomUUID();
+        await env.DB.prepare('INSERT INTO cal_tokens (user_id, token) VALUES (?, ?)')
+          .bind(payload.userId, calToken).run();
+
+        return json({ cal_token: calToken }, 200, headers);
       }
 
       return json({ error: 'Not found' }, 404, headers);

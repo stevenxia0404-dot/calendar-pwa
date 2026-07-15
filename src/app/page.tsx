@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Mic, Send, Calendar, ChevronLeft, ChevronRight, Download, Cloud, CloudOff, LogOut, RefreshCw, Mail } from 'lucide-react';
+import { Mic, Send, Calendar, ChevronLeft, ChevronRight, Download, LogOut, RefreshCw, Mail } from 'lucide-react';
 
 // ==================== 配置 ====================
 
@@ -133,6 +133,46 @@ export default function Home() {
   const [activateError, setActivateError] = useState('');
   const [activateLoading, setActivateLoading] = useState(false);
   const [activateSuccess, setActivateSuccess] = useState(false);
+  const [showCalModal, setShowCalModal] = useState(false);
+  const [icalCopied, setIcalCopied] = useState(false);
+  const [showVersionBanner, setShowVersionBanner] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+
+  // 版本 Banner
+  useEffect(() => {
+    const seen = localStorage.getItem('schedule_version_seen');
+    if (seen !== 'v0.4.0') setShowVersionBanner(true);
+  }, []);
+
+  const dismissBanner = () => {
+    localStorage.setItem('schedule_version_seen', 'v0.4.0');
+    setShowVersionBanner(false);
+  };
+
+  const submitFeedback = async () => {
+    if (!feedbackText.trim()) return;
+    try {
+      await api('/feedback', { method: 'POST', body: JSON.stringify({ text: feedbackText, email: user?.email || '' }) }, token);
+      setFeedbackSent(true);
+      setTimeout(() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }, 2000);
+    } catch { /* ignore */ }
+  };
+
+  // 示例轮播
+  const placeholders = [
+    '后天下午3点买菜',
+    '本周五上午10点开会',
+    '下周三晚上7点聚餐',
+    '下个月15号体检',
+  ];
+  const [phIndex, setPhIndex] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setPhIndex(i => (i + 1) % placeholders.length), 4000);
+    return () => clearInterval(t);
+  }, []);
 
   // 语音状态
   const [isRecording, setIsRecording] = useState(false);
@@ -171,6 +211,15 @@ export default function Home() {
     syncFromCloud(lastSync || undefined);
   }, [isOnline]);
 
+  // 自动轮询（全量同步，先推后拉，无竞态）
+  useEffect(() => {
+    if (!isOnline) return;
+    const timer = setInterval(() => {
+      syncFromCloud();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [isOnline]);
+
   // ==================== 同步 ====================
 
   const syncFromCloud = async (since?: string) => {
@@ -180,18 +229,24 @@ export default function Home() {
       const qs = since ? `?since=${encodeURIComponent(since)}` : '';
       const { events: cloudEvents } = await api(`/events${qs}`, {}, token);
 
-      if (cloudEvents.length > 0) {
-        setEvents(prev => {
-          const map = new Map(prev.map(e => [e.id, e]));
-          for (const ce of cloudEvents) {
-            const local = map.get(ce.id);
-            if (!local || ce.updated_at > local.updatedAt) {
-              map.set(ce.id, { id: ce.id, title: ce.title, date: ce.date, time: ce.time, raw: ce.raw, updatedAt: ce.updated_at });
-            }
+      setEvents(prev => {
+        if (!since) {
+          // 全量同步：云端为准
+          return cloudEvents.map((ce: { id: string; title: string; date: string; time: string; raw: string; updated_at: number }) => ({
+            id: ce.id, title: ce.title, date: ce.date, time: ce.time,
+            raw: ce.raw || '', updatedAt: ce.updated_at
+          }));
+        }
+        // 增量同步：合并
+        const map = new Map(prev.map(e => [e.id, e]));
+        for (const ce of cloudEvents) {
+          const local = map.get(ce.id);
+          if (!local || ce.updated_at > local.updatedAt) {
+            map.set(ce.id, { id: ce.id, title: ce.title, date: ce.date, time: ce.time, raw: ce.raw || '', updatedAt: ce.updated_at });
           }
-          return Array.from(map.values());
-        });
-      }
+        }
+        return Array.from(map.values());
+      });
       localStorage.setItem('schedule_last_sync', new Date().toISOString());
     } catch { /* 静默失败 */ }
     finally { setIsSyncing(false); }
@@ -250,13 +305,26 @@ export default function Home() {
     setToken(null); setUser(null);
   };
 
-  const handleDeleteAccount = async () => {
-    if (!confirm('确定要删除账号和所有云端数据吗？本地数据会保留。')) return;
+
+
+  const [icalUrl, setIcalUrl] = useState('');
+
+  const handleShowCalModal = async () => {
+    setShowCalModal(true);
     if (!token) return;
     try {
-      await api('/auth/account', { method: 'DELETE' }, token);
-      handleLogout();
-    } catch (e: unknown) { alert((e as Error).message); }
+      const data = await api('/auth/cal-token', {}, token);
+      setIcalUrl(`webcal://schedule-api.boluomate.com/events/ical?token=${encodeURIComponent(data.cal_token)}`);
+    } catch { /* ignore */ }
+  };
+
+  const copyIcalUrl = async () => {
+    if (!icalUrl) return;
+    try {
+      await navigator.clipboard.writeText(icalUrl);
+      setIcalCopied(true);
+      setTimeout(() => setIcalCopied(false), 2500);
+    } catch { /* fallback */ }
   };
 
   // ==================== 语音识别 ====================
@@ -272,8 +340,7 @@ export default function Home() {
     r.continuous = false;
 
     r.onresult = (e: SpeechRecognitionEvent) => {
-      const transcript = e.results[0][0].transcript;
-      setInputText(transcript);
+      setInputText(e.results[0][0].transcript);
     };
 
     r.onerror = () => { setIsRecording(false); setWillCancel(false); };
@@ -291,36 +358,30 @@ export default function Home() {
     setIsRecording(false);
   }, []);
 
-  const handlePointerDown = (e: React.PointerEvent) => {
+  // 移动端用 touch，桌面端用 pointer
+  const pressStart = (e: React.TouchEvent | React.PointerEvent) => {
     e.preventDefault();
     startRecording();
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const pressEnd = (e: React.TouchEvent | React.PointerEvent) => {
     e.preventDefault();
     if (willCancel) { stopRecording(); setWillCancel(false); return; }
     stopRecording();
+    // 语音识别结果填入输入框，不自动提交——让用户确认后再发送
   };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
+  const pressMove = (e: React.PointerEvent | React.TouchEvent) => {
     if (!isRecording || !micBtnRef.current) return;
     const btn = micBtnRef.current;
     const rect = btn.getBoundingClientRect();
-    const margin = 40;
-    const outside = e.clientX < rect.left - margin || e.clientX > rect.right + margin ||
-                    e.clientY < rect.top - margin || e.clientY > rect.bottom + margin;
+    const margin = 50;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const outside = clientX < rect.left - margin || clientX > rect.right + margin ||
+                    clientY < rect.top - margin || clientY > rect.bottom + margin;
     setWillCancel(outside);
   };
-
-  // 语音识别结束后，如果 inputText 被填入了内容，自动提交
-  useEffect(() => {
-    if (!isRecording && inputText && inputText !== '（请说出日程，如：后天下午3点买菜）') {
-      const timer = setTimeout(() => {
-        handleSubmit();
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [isRecording]);
 
   // ==================== 日程操作 ====================
 
@@ -348,11 +409,10 @@ export default function Home() {
     };
 
     setEvents(prev => [...prev, newEvent]);
-    if (isOnline && token) pushToCloud(newEvent, 'POST');
-
     setInputText('');
     setIsProcessing(false);
     setDetailDate(formatLocalDate(date));
+    if (isOnline && token) pushToCloud(newEvent, 'POST');
   }, [inputText, isProcessing, selectedDate, isOnline, token]);
 
   const startEdit = (event: ScheduleEvent) => {
@@ -371,8 +431,8 @@ export default function Home() {
       updatedAt: Date.now(),
     };
 
+    if (isOnline && token) await pushToCloud(updated, 'PUT');
     setEvents(prev => prev.map(e => e.id === editingEventId ? updated : e));
-    if (isOnline && token) pushToCloud(updated, 'PUT');
 
     setEditingEventId(null);
     if (detailDate !== editForm.date) setDetailDate(editForm.date);
@@ -381,8 +441,8 @@ export default function Home() {
   const deleteEvent = async (id: string) => {
     if (!confirm('确定要删除这个日程吗？')) return;
     const ev = events.find(e => e.id === id);
+    if (isOnline && token && ev) await pushToCloud(ev, 'DELETE');
     setEvents(prev => prev.filter(e => e.id !== id));
-    if (isOnline && token && ev) pushToCloud(ev, 'DELETE');
   };
 
   const handleExport = () => {
@@ -439,23 +499,32 @@ export default function Home() {
   // ==================== UI ====================
 
   return (
-    <main className="min-h-screen pb-44 bg-[#F7F5F2]">
+    <main className="min-h-screen pb-44 bg-[#F7F5F2] flex flex-col">
+      {/* 版本公告 */}
+      {showVersionBanner && (
+        <div className="bg-[#1C1C1C] text-white px-5 py-3 text-sm flex items-center justify-between">
+          <span><span className="text-[#ED6A3B] font-semibold">v0.4.0</span> 语音输入 · 日历订阅 · 自动同步 · 全新界面</span>
+          <button onClick={dismissBanner} className="text-white/60 hover:text-white ml-3 text-lg leading-none">&times;</button>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
-        <div className="flex justify-between items-center max-w-lg mx-auto">
-          <div>
-            <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
-              <Calendar className="w-5 h-5 text-[#ED6A3B]" /> AI日程管家
-            </h1>
-            <p className="text-xs text-[#A0A0A0] mt-0.5">
-              {isOnline ? (
-                <span className="flex items-center gap-1 text-[#059669]"><Cloud className="w-3 h-3" />{user?.email}</span>
-              ) : (
-                <span className="flex items-center gap-1"><CloudOff className="w-3 h-3" />未激活同步</span>
-              )}
-            </p>
-          </div>
+        <div className="flex justify-between items-center max-w-md mx-auto">
+          <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
+            <Calendar className="w-5 h-5 text-[#ED6A3B]" /> 菠萝日程
+          </h1>
           <div className="flex items-center gap-1">
+            <div className="relative group">
+              <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${isOnline ? 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]' : 'bg-[#D9D4CF]'}`} />
+              <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-50 shadow-lg">
+                {isOnline ? (
+                  <><span className="text-[#34d399]">●</span> {user?.email}<br /><span className="text-[#A0A0A0]">已激活 · 多设备自动同步</span></>
+                ) : (
+                  '未登录，点击右侧激活'
+                )}
+              </div>
+            </div>
             {isOnline && (
               <button onClick={() => syncFromCloud()} disabled={isSyncing}
                 className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="同步" title="同步">
@@ -473,9 +542,23 @@ export default function Home() {
                 <Mail className="w-3.5 h-3.5" /> 激活
               </button>
             )}
+            {isOnline && (
+              <button onClick={handleShowCalModal}
+                className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="日历订阅" title="导出到手机日历">
+                <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" strokeWidth={2} /><path d="M16 2v4M8 2v4M3 10h18" strokeWidth={2} /></svg>
+              </button>
+            )}
             <button onClick={handleExport}
               className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导出" title="导出CSV">
               <Download className="w-4 h-4 text-[#A0A0A0]" />
+            </button>
+            <button onClick={() => setShowFeedback(true)}
+              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="反馈" title="反馈建议">
+              <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" /></svg>
+            </button>
+            <button onClick={() => setShowHelp(true)}
+              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="帮助" title="使用说明">
+              <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
             </button>
           </div>
         </div>
@@ -530,6 +613,109 @@ export default function Home() {
         </div>
       )}
 
+      {/* 日历订阅弹窗 */}
+      {showCalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => { setShowCalModal(false); setIcalCopied(false); }}>
+          <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">导出到手机日历</h2>
+            <p className="text-sm text-[#A0A0A0] mb-5">iPhone 相机扫码自动订阅，或复制链接手动添加</p>
+
+            <div className="flex flex-col items-center mb-4">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(icalUrl)}`}
+                alt="日历订阅二维码"
+                className="w-44 h-44 rounded-lg border border-[#E8E4DF]"
+              />
+              <p className="text-xs text-[#A0A0A0] mt-2">📷 用 iPhone 相机扫描二维码</p>
+            </div>
+
+            <div className="bg-[#F7F5F2] rounded-lg p-3 mb-1 break-all text-xs text-[#5C5C5C] font-mono select-all max-h-20 overflow-y-auto">
+              {icalUrl}
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button onClick={copyIcalUrl}
+                className="flex-1 h-11 bg-[#1C1C1C] text-white rounded-lg text-sm font-semibold hover:bg-[#333] transition-colors">
+                {icalCopied ? '已复制' : '复制链接'}
+              </button>
+              <button onClick={() => { setShowCalModal(false); setIcalCopied(false); }}
+                className="w-11 h-11 rounded-lg border border-[#E8E4DF] text-[#A0A0A0] text-sm font-medium hover:bg-[#F3F1ED] transition-colors flex items-center justify-center">
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 反馈弹窗 */}
+      {showFeedback && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }}>
+          <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">反馈建议</h2>
+            <p className="text-sm text-[#A0A0A0] mb-4">遇到问题或有改进建议？告诉我们</p>
+            {feedbackSent ? (
+              <p className="text-[#059669] text-sm text-center py-4">已收到，感谢反馈！</p>
+            ) : (
+              <>
+                <textarea value={feedbackText} onChange={e => setFeedbackText(e.target.value)}
+                  placeholder="请告诉我们你的想法..."
+                  rows={4} maxLength={500}
+                  className="w-full px-4 py-3 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C] transition-colors mb-4 resize-none" />
+                <div className="flex gap-2">
+                  <button onClick={submitFeedback} disabled={!feedbackText.trim()}
+                    className="flex-1 h-11 bg-[#1C1C1C] text-white rounded-lg text-sm font-semibold hover:bg-[#333] disabled:opacity-40 transition-colors">
+                    提交反馈
+                  </button>
+                  <button onClick={() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }}
+                    className="w-11 h-11 rounded-lg border border-[#E8E4DF] text-[#A0A0A0] text-sm font-medium hover:bg-[#F3F1ED] transition-colors flex items-center justify-center">
+                    ×
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 使用说明弹窗 */}
+      {showHelp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
+          <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-5">
+              <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明</h2>
+              <button onClick={() => setShowHelp(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center transition-colors">&times;</button>
+            </div>
+
+            <div className="space-y-5">
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">快速记录</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">直接输入自然语言，如「<span className="text-[#ED6A3B]">后天下午3点买菜</span>」「<span className="text-[#ED6A3B]">本周五上午10点开会</span>」，回车即保存。日期、时间自动识别。</p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">语音输入</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">按住麦克风按钮说话，松手后文字自动填入输入框。确认无误点发送保存。<br /><span className="text-xs text-[#A0A0A0]">Chrome / Edge 浏览器可用，iPhone 用键盘自带听写</span></p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">多设备同步</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">点击右上角「激活」→ 输入邮箱 → 收到验证码 → 填入 → 完成。之后所有设备自动同步，无需再次登录。</p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">苹果日历订阅</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">激活后点日历图标 → iPhone 相机扫码 → 自动订阅。日程实时出现在系统日历里，支持小组件和通知。</p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">导出</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">点下载按钮导出 CSV 文件，可用 Excel 或 Numbers 打开。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 激活成功提示 */}
       {activateSuccess && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-[#1C1C1C] text-white px-5 py-3 rounded-xl shadow-lg text-sm font-medium animate-bounce">
@@ -537,19 +723,9 @@ export default function Home() {
         </div>
       )}
 
-      {/* 用户信息 Bar */}
-      {isOnline && (
-        <div className="mx-4 mt-3">
-          <div className="bg-white border border-[#E8E4DF] rounded-xl px-4 py-2.5 flex items-center justify-between">
-            <span className="text-[#059669] text-sm font-medium">已激活 · 多设备自动同步</span>
-            <button onClick={handleDeleteAccount} className="text-xs text-[#A0A0A0] hover:text-red-500 transition-colors">删除账号</button>
-          </div>
-        </div>
-      )}
-
       {/* Detail Card */}
       {detailDate && (
-        <div className="mx-4 mt-3 bg-white rounded-2xl p-5 shadow-sm border border-[#E8E4DF]">
+        <div className="mx-4 mt-3 bg-white rounded-2xl p-5 shadow-sm border border-[#E8E4DF] order-2">
           <div className="flex justify-between items-center mb-4">
             <h2 className="font-semibold text-[#1C1C1C]">{detailDate} 日程</h2>
             <button onClick={() => setDetailDate(null)}
@@ -613,7 +789,7 @@ export default function Home() {
       )}
 
       {/* Calendar */}
-      <div className="mx-4 mt-3 bg-white/95 backdrop-blur rounded-2xl p-5 shadow-xl border border-white/20">
+      <div className="mx-4 mt-3 bg-white rounded-2xl p-5 shadow-sm border border-[#E8E4DF] order-1">
         <div className="flex justify-between items-center mb-5">
           <h2 className="text-lg font-bold text-[#1C1C1C]">
             {currentDate.getFullYear()}年{currentDate.getMonth() + 1}月
@@ -651,16 +827,19 @@ export default function Home() {
         <div className="flex items-center gap-2 bg-[#F3F1ED]/80 p-1.5 rounded-2xl border border-transparent focus-within:border-[#ED6A3B] focus-within:bg-white transition-all duration-300">
           <input type="text" value={inputText} onChange={e => setInputText(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-            placeholder="输入：后天下午3点买菜"
+            placeholder={placeholders[phIndex]}
             className="flex-1 bg-transparent px-3 py-2.5 text-[#1C1C1C] outline-none text-base placeholder:text-[#A0A0A0]" />
 
           {/* 麦克风按钮（仅 Chrome/Edge 显示） */}
           {speechSupported && (
             <button ref={micBtnRef}
-              onPointerDown={handlePointerDown}
-              onPointerUp={handlePointerUp}
-              onPointerMove={handlePointerMove}
-              onPointerLeave={handlePointerUp}
+              onPointerDown={pressStart}
+              onPointerUp={pressEnd}
+              onPointerMove={pressMove}
+              onPointerLeave={pressEnd}
+              onTouchStart={pressStart}
+              onTouchEnd={pressEnd}
+              onTouchMove={pressMove}
               onContextMenu={e => e.preventDefault()}
               className={`w-14 h-14 rounded-full flex items-center justify-center transition-all select-none touch-none
                 ${isRecording

@@ -1,7 +1,7 @@
 {
   "name": "schedule-api",
   "version": "1.0.0",
-  "description": "AI日程管家后端API",
+  "description": "菠萝日程后端API",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"

@@ -1,7 +1,7 @@
 {
-  "name": "AI日程管家",
-  "short_name": "日程AI",
-  "description": "语音智能日程管理",
+  "name": "菠萝日程",
+  "short_name": "菠萝日程",
+  "description": "语音智能日程管理 · 多设备自动同步",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
