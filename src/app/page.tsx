@@ -403,30 +403,34 @@ export default function Home() {
     if (isProcessing || !inputText.trim()) return;
     setIsProcessing(true);
 
-    const text = inputText.trim();
-    const smartDate = parseSmartDate(text);
-    const date = smartDate || new Date(selectedDate);
-    const timeObj = extractTime(text);
+    const lines = inputText.trim().split('\n').map(s => s.trim()).filter(Boolean);
+    if (lines.length === 0) { setIsProcessing(false); return; }
 
-    // 标题：去掉日期词和时间词后的剩余
-    const title = text
-      .replace(/今天|明天|后天|大后天|下周|本周|\d{1,2}[号日]|(上午|下午|晚上|早上)?\s*\d{1,2}\s*[点:：]\s*\d{0,2}\s*[分]?|\d+天后|\d+月\d+[号日]|下个月\d+[号日]/g, '')
-      .trim() || '新日程';
+    const newEvents: ScheduleEvent[] = [];
+    for (const line of lines) {
+      const smartDate = parseSmartDate(line);
+      const date = smartDate || new Date(selectedDate);
+      const timeObj = extractTime(line);
 
-    const newEvent: ScheduleEvent = {
-      id: crypto.randomUUID(),
-      title,
-      date: formatLocalDate(date),
-      time: timeObj.str,
-      raw: text,
-      updatedAt: Date.now(),
-    };
+      const title = line
+        .replace(/今天|明天|后天|大后天|下周|本周|\d{1,2}[号日]|(上午|下午|晚上|早上)?\s*\d{1,2}\s*[点:：]\s*\d{0,2}\s*[分]?|\d+天后|\d+月\d+[号日]|下个月\d+[号日]/g, '')
+        .trim() || '新日程';
 
-    setEvents(prev => [...prev, newEvent]);
+      newEvents.push({
+        id: crypto.randomUUID(),
+        title,
+        date: formatLocalDate(date),
+        time: timeObj.str,
+        raw: line,
+        updatedAt: Date.now(),
+      });
+    }
+
+    setEvents(prev => [...prev, ...newEvents]);
     setInputText('');
     setIsProcessing(false);
-    setDetailDate(formatLocalDate(date));
-    if (isOnline && token) pushToCloud(newEvent, 'POST');
+    setDetailDate(formatLocalDate(selectedDate));
+    if (isOnline && token) newEvents.forEach(e => pushToCloud(e, 'POST'));
   }, [inputText, isProcessing, selectedDate, isOnline, token]);
 
   const startEdit = (event: ScheduleEvent) => {
