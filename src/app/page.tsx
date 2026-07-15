@@ -149,22 +149,23 @@ export default function Home() {
   const [activateSuccess, setActivateSuccess] = useState(false);
   const [showCalModal, setShowCalModal] = useState(false);
   const [icalCopied, setIcalCopied] = useState(false);
-  const [showVersionBanner, setShowVersionBanner] = useState(false);
+  const [showVersionModal, setShowVersionModal] = useState(false);
+
+  // v1.0 更新弹窗（首次访问展示一次）
+  useEffect(() => {
+    const seen = localStorage.getItem('schedule_version_seen');
+    if (seen !== 'v1.0') setShowVersionModal(true);
+  }, []);
+
+  const dismissVersionModal = () => {
+    localStorage.setItem('schedule_version_seen', 'v1.0');
+    setShowVersionModal(false);
+  };
+
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-
-  // 版本 Banner
-  useEffect(() => {
-    const seen = localStorage.getItem('schedule_version_seen');
-    if (seen !== 'v0.4.0') setShowVersionBanner(true);
-  }, []);
-
-  const dismissBanner = () => {
-    localStorage.setItem('schedule_version_seen', 'v0.4.0');
-    setShowVersionBanner(false);
-  };
 
   const submitFeedback = async () => {
     if (!feedbackText.trim()) return;
@@ -518,11 +519,32 @@ export default function Home() {
 
   return (
     <main className="min-h-screen pb-44 bg-[#F7F5F2] flex flex-col">
-      {/* 版本公告 */}
-      {showVersionBanner && (
-        <div className="bg-[#1C1C1C] text-white px-5 py-3 text-sm flex items-center justify-between">
-          <span><span className="text-[#ED6A3B] font-semibold">v0.4.0</span> 语音输入 · 日历订阅 · 自动同步 · 全新界面</span>
-          <button onClick={dismissBanner} className="text-white/60 hover:text-white ml-3 text-lg leading-none">&times;</button>
+      {/* v1.0 更新弹窗 */}
+      {showVersionModal && (
+        <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm" onClick={dismissVersionModal}>
+          <div className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:max-w-sm p-8 shadow-lg animate-slide-up" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-7">
+              <img src="/icon-192x192.png" alt="" className="w-10 h-10 rounded-lg" />
+              <div>
+                <h2 className="text-xl font-bold text-[#1C1C1C] leading-tight">菠萝日程</h2>
+                <span className="text-sm font-semibold text-[#ED6A3B]">v1.0</span>
+              </div>
+            </div>
+
+            <div className="space-y-4 mb-8 text-sm text-[#5C5C5C]">
+              <div className="flex gap-3"><span className="text-base shrink-0">快速记录</span><span className="text-[#A0A0A0]">自然语言输入，支持中文数字 · 换行多日程</span></div>
+              <div className="flex gap-3"><span className="text-base shrink-0">语音输入</span><span className="text-[#A0A0A0]">按住说话松开发送，滑动取消</span></div>
+              <div className="flex gap-3"><span className="text-base shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱隐形激活 · 30 秒自动同步</span></div>
+              <div className="flex gap-3"><span className="text-base shrink-0">苹果日历</span><span className="text-[#A0A0A0]">扫码订阅 · 15 分钟自动刷新</span></div>
+              <div className="flex gap-3"><span className="text-base shrink-0">桌面应用</span><span className="text-[#A0A0A0]">添加到主屏幕，像 App 一样打开</span></div>
+              <div className="flex gap-3"><span className="text-base shrink-0">反馈建议</span><span className="text-[#A0A0A0]">弹窗提交 · 后台查看</span></div>
+            </div>
+
+            <button onClick={dismissVersionModal}
+              className="w-full h-12 bg-[#1C1C1C] text-white rounded-xl text-sm font-semibold hover:bg-[#333] transition-colors">
+              开始使用
+            </button>
+          </div>
         </div>
       )}
 
