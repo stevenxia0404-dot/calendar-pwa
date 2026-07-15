@@ -535,7 +535,7 @@ export default function Home() {
           <div className="flex items-center gap-1">
             <div className="relative group">
               <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${isOnline ? 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]' : 'bg-[#D9D4CF]'}`} />
-              <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-50 shadow-lg">
+              <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-[60] shadow-lg">
                 {isOnline ? (
                   <><span className="text-[#34d399]">●</span> {user?.email}<br /><span className="text-[#A0A0A0]">已激活 · 多设备自动同步</span></>
                 ) : (
@@ -584,7 +584,7 @@ export default function Home() {
 
       {/* 激活弹窗 */}
       {showActivate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => { if (!activateLoading) { setShowActivate(false); setActivateStep('email'); setActivateError(''); } }}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30" onClick={() => { if (!activateLoading) { setShowActivate(false); setActivateStep('email'); setActivateError(''); } }}>
           <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">激活跨设备同步</h2>
             <p className="text-sm text-[#A0A0A0] mb-5">
@@ -633,7 +633,7 @@ export default function Home() {
 
       {/* 日历订阅弹窗 */}
       {showCalModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => { setShowCalModal(false); setIcalCopied(false); }}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30" onClick={() => { setShowCalModal(false); setIcalCopied(false); }}>
           <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">导出到手机日历</h2>
             <p className="text-sm text-[#A0A0A0] mb-5">iPhone 相机扫码自动订阅，或复制链接手动添加</p>
@@ -667,7 +667,7 @@ export default function Home() {
 
       {/* 反馈弹窗 */}
       {showFeedback && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30" onClick={() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }}>
           <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">反馈建议</h2>
             <p className="text-sm text-[#A0A0A0] mb-4">遇到问题或有改进建议？告诉我们</p>
@@ -697,7 +697,7 @@ export default function Home() {
 
       {/* 使用说明弹窗 */}
       {showHelp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
           <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-5">
               <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明</h2>
@@ -741,7 +741,7 @@ export default function Home() {
 
       {/* 激活成功提示 */}
       {activateSuccess && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-[#1C1C1C] text-white px-5 py-3 rounded-xl shadow-lg text-sm font-medium animate-bounce">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] bg-[#1C1C1C] text-white px-5 py-3 rounded-xl shadow-lg text-sm font-medium animate-bounce">
           激活成功！数据自动同步中
         </div>
       )}
