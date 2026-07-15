@@ -353,7 +353,7 @@ export default {
         if (!row) return json({ error: 'Invalid token' }, 401, headers);
 
         const { results: evts } = await env.DB.prepare(
-          'SELECT title, date, time, raw FROM events WHERE user_id = ? ORDER BY date, time'
+          'SELECT id, title, date, time, raw, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
         ).bind(row.user_id).all();
 
         const toUTC = (d, t) => {
@@ -384,7 +384,8 @@ export default {
             `DTEND:${addHour(dt)}`,
             `SUMMARY:${e.title.replace(/[,;\\]/g, '\\$&')}`,
             `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
-            `UID:${crypto.randomUUID()}`,
+            `UID:${e.id}`,
+            `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
             'END:VEVENT'
           );
         }
@@ -505,14 +506,17 @@ export default {
         return json({ ok: true }, 200, headers);
       }
 
-      // 生成日历订阅 token（简化版，无 JWT 编码问题）
+      // 获取或生成日历订阅 token（复用已有 token，避免旧链接失效）
       if (path === '/auth/cal-token' && method === 'GET') {
         const payload = await requireAuth(request, env);
         if (!payload) return json({ error: '尚未激活同步，你的数据很安全' }, 401, headers);
 
-        // 删除旧 token
-        await env.DB.prepare('DELETE FROM cal_tokens WHERE user_id = ?').bind(payload.userId).run();
-        // 生成新 token
+        const existing = await env.DB.prepare(
+          'SELECT token FROM cal_tokens WHERE user_id = ?'
+        ).bind(payload.userId).first();
+
+        if (existing) return json({ cal_token: existing.token }, 200, headers);
+
         const calToken = crypto.randomUUID();
         await env.DB.prepare('INSERT INTO cal_tokens (user_id, token) VALUES (?, ?)')
           .bind(payload.userId, calToken).run();
