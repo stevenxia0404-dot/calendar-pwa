@@ -618,7 +618,18 @@ export default function Home() {
         }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        const errMsg = data.error?.message || `HTTP ${res.status}`;
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `API 错误：${errMsg}` }]);
+        setChatLoading(false);
+        return;
+      }
       const raw = data.choices?.[0]?.message?.content || '';
+      if (!raw) {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: 'API 返回为空，请检查 Key 和模型名称是否正确。原始响应：' + JSON.stringify(data).slice(0, 200) }]);
+        setChatLoading(false);
+        return;
+      }
       // 尝试解析JSON响应
       let parsed: { action: string; events?: Array<{ date: string; time: string; title: string; note?: string; type: string }>; message?: string };
       try {
