@@ -560,7 +560,7 @@ export default function Home() {
     if (saved) { try { setAiConfig(JSON.parse(saved)); } catch { /* ignore */ } }
   }, []);
 
-  const SYSTEM_PROMPT = `你是菠萝日程的AI助手。根据用户输入，返回JSON格式的日程操作。
+  const getSystemPrompt = () => `你是菠萝日程的AI助手。当前日期：${formatLocalDate(new Date())}。根据用户输入，返回JSON格式的日程操作。
 
 操作类型：
 1. { "action": "create", "events": [{ "date": "YYYY-MM-DD", "time": "HH:mm或不填", "title": "事项", "note": "备注", "type": "event或task" }] }
@@ -569,6 +569,7 @@ export default function Home() {
 
 规则：
 - 有明确时间/日期的归类为event，仅提到"今天/明天做XX"无具体时间的归为task（time不填）
+- "后天"就是当前日期+2天，"下周X"按当前日期推算
 - 如果用户只是聊天或问问题，用chat或query
 - 只返回JSON，不返回其他内容`;
 
@@ -612,7 +613,7 @@ export default function Home() {
         body: JSON.stringify({
           model: aiConfig.model,
           messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: getSystemPrompt() },
             ...chatMessages.map(m => ({ role: m.role, content: m.content })),
             { role: 'user', content: userMsg },
           ],
