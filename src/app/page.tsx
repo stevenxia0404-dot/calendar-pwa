@@ -1366,7 +1366,9 @@ export default function Home() {
                     <Plus className="w-5 h-5" />
                   </button>
                   {showPlusMenu && (
-                    <div className="absolute bottom-12 left-0 bg-white rounded-2xl shadow-xl border border-[#E8E4DF] py-2 min-w-[140px] z-[60] animate-slide-up" onClick={() => setShowPlusMenu(false)}>
+                    <>
+                      <div className="fixed inset-0 z-[59]" onClick={() => setShowPlusMenu(false)} />
+                      <div className="absolute bottom-12 left-0 bg-white rounded-2xl shadow-xl border border-[#E8E4DF] py-2 min-w-[140px] z-[60] animate-slide-up">
                       <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
                         <svg className="w-5 h-5 text-[#ED6A3B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2}/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" strokeWidth={2}/></svg>
                         照片
@@ -1383,6 +1385,7 @@ export default function Home() {
                         模板
                       </button>
                     </div>
+                    </>
                   )}
                 </div>
                 {/* 语音 */}
