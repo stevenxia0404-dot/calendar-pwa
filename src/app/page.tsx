@@ -150,7 +150,7 @@ export default function Home() {
   // 对话框状态
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; card?: { date: string; time: string; title: string; type: 'event' | 'task' } }[]>([]);
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; image?: string; card?: { date: string; time: string; title: string; type: 'event' | 'task' } }[]>([]);
   const [aiConfig, setAiConfig] = useState<{ brand: string; model: string; key: string }>({ brand: 'deepseek', model: 'deepseek-v4-flash', key: '' });
   const [showAiSettings, setShowAiSettings] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
@@ -467,7 +467,8 @@ export default function Home() {
       if (file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = () => {
-          setChatMessages(prev => [...prev, { role: 'user', content: `[图片: ${file.name}]` }]);
+          const base64 = reader.result as string;
+          setChatMessages(prev => [...prev, { role: 'user', content: `[图片: ${file.name}]`, image: base64 }]);
         };
         reader.readAsDataURL(file);
       } else if (ext === 'xlsx' || ext === 'xls') {
@@ -559,6 +560,7 @@ export default function Home() {
       name: 'Kimi 月之暗面', endpoint: 'https://api.moonshot.cn/v1/chat/completions', platform: 'https://platform.kimi.com', billing: 'https://platform.kimi.com/console/account',
       models: [
         { id: 'kimi-k2.6', label: 'K2.6', price: '¥4.3/百万token' },
+        { id: 'kimi-k2.5', label: 'K2.5 多模态', price: '¥4.3/百万token' },
       ],
     },
     doubao: {
@@ -642,7 +644,15 @@ export default function Home() {
           model: aiConfig.model,
           messages: [
             { role: 'system', content: getSystemPrompt() },
-            ...chatMessages.map(m => ({ role: m.role, content: m.content })),
+            ...chatMessages.map(m => {
+              if (m.image && m.role === 'user') {
+                return { role: 'user', content: [
+                  { type: 'image_url', image_url: { url: m.image } },
+                  { type: 'text', text: m.content },
+                ]};
+              }
+              return { role: m.role, content: m.content };
+            }),
             { role: 'user', content: userMsg },
           ],
         }),
