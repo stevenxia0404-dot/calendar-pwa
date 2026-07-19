@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, Plus, MessageCircle, X, Mic } from 'lucide-react';
 import { read, utils } from 'xlsx';
+import * as pdfjsLib from 'pdfjs-dist';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
 
 // ==================== 配置 ====================
 
@@ -478,6 +480,17 @@ export default function Home() {
         const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
         const text = rows.map(r => r.map(c => String(c ?? '').trim()).join(',')).join('\n');
         setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
+      } else if (ext === 'pdf') {
+        const buf = await file.arrayBuffer();
+        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        const pages: string[] = [];
+        for (let i = 1; i <= Math.min(doc.numPages, 5); i++) {
+          const page = await doc.getPage(i);
+          const content = await page.getTextContent();
+          pages.push(content.items.map((item: { str: string }) => item.str).join(' '));
+        }
+        const text = pages.join('\n---\n');
+        setChatMessages(prev => [...prev, { role: 'user', content: `[PDF: ${file.name}]\n${text.slice(0, 3000)}${doc.numPages > 5 ? '\n...(仅展示前5页)' : ''}` }]);
       } else {
         const text = await file.text();
         setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
@@ -1324,7 +1337,19 @@ export default function Home() {
                   <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
                     m.role === 'user' ? 'bg-[#ED6A3B] text-white' : 'bg-[#F3F1ED] text-[#1C1C1C]'
                   }`}>
-                    <p className="whitespace-pre-wrap">{m.content}</p>
+                    {m.image ? (
+                      <div className="space-y-1.5">
+                        <img src={m.image} alt="" className="max-w-[200px] max-h-[200px] rounded-lg object-cover" />
+                        <p className="text-xs opacity-80">{m.content.replace('[图片: ', '').replace(']', '')}</p>
+                      </div>
+                    ) : m.content.startsWith('[文件:') || m.content.startsWith('[PDF:') ? (
+                      <div className="flex items-center gap-2">
+                        <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                        <span className="truncate text-xs">{m.content.split('\n')[0].replace('[文件: ', '').replace('[PDF: ', '').replace(']', '')}</span>
+                      </div>
+                    ) : (
+                      <p className="whitespace-pre-wrap">{m.content}</p>
+                    )}
                     {m.card && (
                       <div className="mt-2 p-3 bg-white rounded-xl border border-[#E8E4DF]">
                         <div className="text-xs text-[#5C5C5C] space-y-0.5 mb-2">
