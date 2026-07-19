@@ -1321,7 +1321,7 @@ export default function Home() {
                       <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
                         <svg className="w-5 h-5 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
                         文件
-                        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.pdf,.txt" onChange={e => { if (e.target.files?.[0]) { parseImportFile(e.target.files[0]); setShowImportModal(true); } e.target.value = ''; }} className="hidden" />
+                        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf,.txt,.docx,.ics,.json" onChange={e => { if (e.target.files?.[0]) { parseImportFile(e.target.files[0]); setShowImportModal(true); } e.target.value = ''; }} className="hidden" />
                       </label>
                       <button onClick={() => { generateCsvTemplate(); setShowPlusMenu(false); }}
                         className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] w-full text-left text-sm text-[#1C1C1C]">
