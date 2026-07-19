@@ -461,6 +461,7 @@ export default function Home() {
 
   // 上传文件/图片 → 直接进聊天
   const uploadToChat = async (file: File) => {
+    setShowChat(true);
     const ext = file.name.split('.').pop()?.toLowerCase();
     try {
       if (file.type.startsWith('image/')) {
