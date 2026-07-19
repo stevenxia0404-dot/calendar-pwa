@@ -614,7 +614,6 @@ export default function Home() {
             ...chatMessages.map(m => ({ role: m.role, content: m.content })),
             { role: 'user', content: userMsg },
           ],
-          temperature: 0.3,
         }),
       });
       const data = await res.json();
