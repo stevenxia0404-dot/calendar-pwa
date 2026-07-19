@@ -3,8 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, Plus, MessageCircle, X, Mic } from 'lucide-react';
 import { read, utils } from 'xlsx';
-import * as pdfjsLib from 'pdfjs-dist';
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
 
 // ==================== 配置 ====================
 
@@ -481,6 +479,8 @@ export default function Home() {
         const text = rows.map(r => r.map(c => String(c ?? '').trim()).join(',')).join('\n');
         setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
       } else if (ext === 'pdf') {
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
         const buf = await file.arrayBuffer();
         const doc = await pdfjsLib.getDocument({ data: buf }).promise;
         const pages: string[] = [];
