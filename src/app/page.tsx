@@ -487,7 +487,7 @@ export default function Home() {
         for (let i = 1; i <= Math.min(doc.numPages, 5); i++) {
           const page = await doc.getPage(i);
           const content = await page.getTextContent();
-          pages.push(content.items.map((item: { str: string }) => item.str).join(' '));
+          pages.push(content.items.map((item: unknown) => (item as { str: string }).str).join(' '));
         }
         const text = pages.join('\n---\n');
         setChatMessages(prev => [...prev, { role: 'user', content: `[PDF: ${file.name}]\n${text.slice(0, 3000)}${doc.numPages > 5 ? '\n...(仅展示前5页)' : ''}` }]);
