@@ -177,14 +177,14 @@ export default function Home() {
   const [icalCopied, setIcalCopied] = useState(false);
   const [showVersionModal, setShowVersionModal] = useState(false);
 
-  // v1.0 更新弹窗（首次访问展示一次）
+  // v2.0 更新弹窗（首次访问展示一次）
   useEffect(() => {
     const seen = localStorage.getItem('schedule_version_seen');
-    if (seen !== 'v1.0') setShowVersionModal(true);
+    if (seen !== 'v2.0') setShowVersionModal(true);
   }, []);
 
   const dismissVersionModal = () => {
-    localStorage.setItem('schedule_version_seen', 'v1.0');
+    localStorage.setItem('schedule_version_seen', 'v2.0');
     setShowVersionModal(false);
   };
 
@@ -717,17 +717,17 @@ export default function Home() {
               <img src="/icon-192x192.png" alt="" className="w-8 h-8 rounded-lg" />
               <div>
                 <h2 className="text-lg font-bold text-[#1C1C1C] leading-tight">菠萝日程</h2>
-                <span className="text-xs font-semibold text-[#ED6A3B]">v1.0</span>
+                <span className="text-xs font-semibold text-[#ED6A3B]">v2.0</span>
               </div>
             </div>
 
             <div className="space-y-3 mb-6 text-xs text-[#5C5C5C]">
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">快速记录</span><span className="text-[#A0A0A0]">自然语言输入，支持中文数字 · 换行多日程</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">语音输入</span><span className="text-[#A0A0A0]">按住说话松开发送，滑动取消</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱隐形激活 · 30 秒自动同步</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">AI 助理</span><span className="text-[#A0A0A0]">右下角点 💬 对话创建/查询日程 · 支持 DeepSeek 等</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">每日任务</span><span className="text-[#A0A0A0]">无时间的待办自动归为任务 · 完成后划线保留</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">文件导入</span><span className="text-[#A0A0A0]">📎 上传或拖入 CSV/Excel/PDF · 预览后确认</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱激活 · 30 秒自动同步</span></div>
               <div className="flex gap-2.5"><span className="text-sm shrink-0">苹果日历</span><span className="text-[#A0A0A0]">扫码订阅 · 15 分钟自动刷新</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">桌面应用</span><span className="text-[#A0A0A0]">添加到主屏幕，像 App 一样打开</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">反馈建议</span><span className="text-[#A0A0A0]">弹窗提交 · 后台查看</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">安全防护</span><span className="text-[#A0A0A0]">CORS 白名单 · 限流 · CSP · JWT 短期</span></div>
             </div>
 
             <button onClick={dismissVersionModal}
