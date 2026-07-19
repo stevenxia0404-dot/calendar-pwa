@@ -453,7 +453,8 @@ export default function Home() {
         }
         setImportText(csvLines.join('\n'));
       } else {
-        alert('仅支持 .csv 和 .xlsx 文件'); return;
+        // PDF / docx / txt / ics / json 等→ 读为文本，交给 AI 解析
+        setImportText(await file.text());
       }
     } catch { alert('文件读取失败'); }
   };
