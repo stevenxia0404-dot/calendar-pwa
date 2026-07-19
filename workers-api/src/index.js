@@ -65,9 +65,18 @@ async function verifyJWT(token, secret) {
 
 // ==================== 工具函数 ====================
 
+const ALLOWED_ORIGINS = [
+  'https://schedule.boluomate.com',
+  'https://schedule-pro.pages.dev',
+  'http://localhost:3000',
+  'http://localhost:3456',
+  'http://localhost:3457',
+];
+
 function corsHeaders(origin) {
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Origin': allowed,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
@@ -79,6 +88,30 @@ function json(data, status = 200, extraHeaders = {}) {
     status,
     headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
+}
+
+// ==================== 限流 ====================
+
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 分钟窗口
+const RATE_LIMIT_MAX = 60;           // 每个 IP 每分钟最多 60 次
+
+async function checkRateLimit(env, ip) {
+  const key = `rl:${ip}`;
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW;
+
+  // 清理过期记录 + 计数
+  const { results } = await env.DB.prepare(
+    'SELECT COUNT(*) as cnt FROM rate_limits WHERE ip = ? AND timestamp > ?'
+  ).bind(key, windowStart).all();
+
+  if (results[0]?.cnt >= RATE_LIMIT_MAX) return false;
+
+  await env.DB.prepare(
+    'INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?)'
+  ).bind(key, now).run();
+
+  return true;
 }
 
 function generateCode() {
@@ -128,6 +161,14 @@ export default {
 
     if (method === 'OPTIONS') {
       return new Response(null, { status: 204, headers });
+    }
+
+    // 限流检查（跳过 OPTIONS 和管理页面）
+    if (path !== '/' && path !== '/feedback') {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      if (!(await checkRateLimit(env, ip))) {
+        return json({ error: '请求太频繁，请稍后再试' }, 429, headers);
+      }
     }
 
     // 管理页面：查看反馈
@@ -277,7 +318,7 @@ export default {
         }
 
         const token = await signJWT(
-          { userId: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 365 * 24 * 3600 },
+          { userId: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
           env.JWT_SECRET
         );
 
@@ -353,7 +394,7 @@ export default {
         if (!row) return json({ error: 'Invalid token' }, 401, headers);
 
         const { results: evts } = await env.DB.prepare(
-          'SELECT id, title, date, time, raw, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
+          'SELECT id, title, date, time, raw, type, completed, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
         ).bind(row.user_id).all();
 
         const toUTC = (d, t) => {
@@ -365,6 +406,11 @@ export default {
                 hh = parseInt(dt.slice(9,11)), mm = parseInt(dt.slice(11,13));
           const d = new Date(y, mo, da, hh+1, mm);
           return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}00`;
+        };
+        const allDayEnd = (d) => {
+          const [y, m, day] = d.split('-').map(Number);
+          const next = new Date(y, m - 1, day + 1);
+          return `${next.getFullYear()}${String(next.getMonth()+1).padStart(2,'0')}${String(next.getDate()).padStart(2,'0')}`;
         };
 
         const lines = [
@@ -378,17 +424,32 @@ export default {
         ];
 
         for (const e of (evts || [])) {
-          const dt = toUTC(e.date, e.time);
-          lines.push(
-            'BEGIN:VEVENT',
-            `DTSTART:${dt}`,
-            `DTEND:${addHour(dt)}`,
-            `SUMMARY:${e.title.replace(/[,;\\]/g, '\\$&')}`,
-            `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
-            `UID:${e.id}`,
-            `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
-            'END:VEVENT'
-          );
+          if (e.type === 'task') {
+            const dateStr = e.date.replace(/-/g, '');
+            const prefix = e.completed ? '✓ ' : '';
+            lines.push(
+              'BEGIN:VEVENT',
+              `DTSTART;VALUE=DATE:${dateStr}`,
+              `DTEND;VALUE=DATE:${allDayEnd(e.date)}`,
+              `SUMMARY:${prefix}${e.title.replace(/[,;\\]/g, '\\$&')}`,
+              `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
+              `UID:${e.id}`,
+              `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
+              'END:VEVENT'
+            );
+          } else {
+            const dt = toUTC(e.date, e.time);
+            lines.push(
+              'BEGIN:VEVENT',
+              `DTSTART:${dt}`,
+              `DTEND:${addHour(dt)}`,
+              `SUMMARY:${e.title.replace(/[,;\\]/g, '\\$&')}`,
+              `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
+              `UID:${e.id}`,
+              `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
+              'END:VEVENT'
+            );
+          }
         }
 
         lines.push('END:VCALENDAR');
@@ -412,7 +473,7 @@ export default {
       // 获取日程（支持增量同步）
       if (path === '/events' && method === 'GET') {
         const since = url.searchParams.get('since');
-        let query = 'SELECT id, title, date, time, raw, updated_at FROM events WHERE user_id = ?';
+        let query = 'SELECT id, title, date, time, raw, type, completed, updated_at FROM events WHERE user_id = ?';
         const params = [userId];
 
         if (since) {
@@ -428,8 +489,8 @@ export default {
 
       // 创建日程
       if (path === '/events' && method === 'POST') {
-        const { id, title, date, time, raw, updatedAt } = await request.json();
-        if (!title || !date || !time) {
+        const { id, title, date, time, raw, updatedAt, type, completed } = await request.json();
+        if (!title || !date) {
           return json({ error: '缺少必填字段' }, 400, headers);
         }
 
@@ -438,8 +499,8 @@ export default {
         const ts = updatedAt || Date.now();
 
         await env.DB.prepare(
-          'INSERT OR REPLACE INTO events (id, user_id, title, date, time, raw, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).bind(eventId, userId, title, date, time, raw || '', ts).run();
+          'INSERT OR REPLACE INTO events (id, user_id, title, date, time, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(eventId, userId, title, date, time || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
       }
@@ -454,8 +515,8 @@ export default {
         const merged = [];
 
         for (const ev of events) {
-          const { id, title, date, time, raw, updatedAt } = ev;
-          if (!id || !title || !date || !time) continue;
+          const { id, title, date, time, raw, updatedAt, type, completed } = ev;
+          if (!id || !title || !date) continue;
 
           // 检查服务端版本是否更新
           const existing = await env.DB.prepare(
@@ -464,8 +525,8 @@ export default {
 
           if (!existing || (updatedAt && updatedAt > existing.updated_at)) {
             await env.DB.prepare(
-              'INSERT OR REPLACE INTO events (id, user_id, title, date, time, raw, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-            ).bind(id, userId, title, date, time, raw || '', updatedAt || Date.now()).run();
+              'INSERT OR REPLACE INTO events (id, user_id, title, date, time, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).bind(id, userId, title, date, time || '', raw || '', type || 'event', completed ? 1 : 0, updatedAt || Date.now()).run();
             merged.push(id);
           }
         }
@@ -473,10 +534,29 @@ export default {
         return json({ merged: merged.length }, 200, headers);
       }
 
+      // 切换任务完成状态
+      if (path.startsWith('/events/') && path.endsWith('/toggle') && method === 'PUT') {
+        const eventId = path.split('/')[2];
+
+        const existing = await env.DB.prepare(
+          'SELECT * FROM events WHERE id = ? AND user_id = ?'
+        ).bind(eventId, userId).first();
+
+        if (!existing) return json({ error: '日程不存在' }, 404, headers);
+
+        const newCompleted = existing.completed ? 0 : 1;
+        const ts = Date.now();
+        await env.DB.prepare(
+          'UPDATE events SET completed = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(newCompleted, ts, eventId, userId).run();
+
+        return json({ completed: !!newCompleted, updated_at: ts }, 200, headers);
+      }
+
       // 更新日程
       if (path.startsWith('/events/') && method === 'PUT') {
         const eventId = path.split('/')[2];
-        const { title, date, time, raw, updatedAt } = await request.json();
+        const { title, date, time, raw, updatedAt, type, completed } = await request.json();
 
         const existing = await env.DB.prepare(
           'SELECT * FROM events WHERE id = ? AND user_id = ?'
@@ -486,8 +566,8 @@ export default {
 
         const ts = updatedAt || Date.now();
         await env.DB.prepare(
-          'UPDATE events SET title = ?, date = ?, time = ?, raw = ?, updated_at = ? WHERE id = ? AND user_id = ?'
-        ).bind(title, date, time, raw || '', ts, eventId, userId).run();
+          'UPDATE events SET title = ?, date = ?, time = ?, raw = ?, type = ?, completed = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(title, date, time || '', raw || '', type || 'event', completed ? 1 : 0, ts, eventId, userId).run();
 
         return json({ ok: true, updated_at: ts }, 200, headers);
       }

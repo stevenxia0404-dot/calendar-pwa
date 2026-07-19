@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Mic, Send, ChevronLeft, ChevronRight, Download, LogOut, RefreshCw, Mail } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, Plus, MessageCircle, X, Mic } from 'lucide-react';
+import { read, utils } from 'xlsx';
 
 // ==================== 配置 ====================
 
@@ -14,6 +15,18 @@ function formatLocalDate(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = '', inQuote = false;
+  for (const ch of line) {
+    if (ch === '"') { inQuote = !inQuote; }
+    else if (ch === ',' && !inQuote) { cells.push(cur.trim()); cur = ''; }
+    else { cur += ch; }
+  }
+  cells.push(cur.trim());
+  return cells;
 }
 
 function extractTime(text: string) {
@@ -117,6 +130,8 @@ interface ScheduleEvent {
   time: string;
   raw: string;
   updatedAt: number;
+  type: 'event' | 'task';
+  completed: boolean;
 }
 
 interface User { id: number; email: string; }
@@ -128,11 +143,22 @@ export default function Home() {
   const [events, setEvents] = useState<ScheduleEvent[]>([]);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [inputText, setInputText] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ title: '', date: '', time: '' });
+
+  // 对话框状态
+  const [showChat, setShowChat] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; card?: { date: string; time: string; title: string; type: 'event' | 'task' } }[]>([]);
+  const [aiConfig, setAiConfig] = useState<{ brand: string; model: string; key: string }>({ brand: 'deepseek', model: 'deepseek-v4-flash', key: '' });
+  const [showAiSettings, setShowAiSettings] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // 认证状态
   const [user, setUser] = useState<User | null>(null);
@@ -166,6 +192,10 @@ export default function Home() {
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importPreview, setImportPreview] = useState<ScheduleEvent[] | null>(null);
+  const [importGroups, setImportGroups] = useState<{ id: string; name: string; count: number; time: string }[]>([]);
 
   const submitFeedback = async () => {
     if (!feedbackText.trim()) return;
@@ -175,25 +205,6 @@ export default function Home() {
       setTimeout(() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }, 2000);
     } catch { /* ignore */ }
   };
-
-  // 示例轮播
-  const placeholders = [
-    '后天下午3点买菜',
-    '本周五上午10点开会',
-    '下周三晚上7点聚餐',
-    '下个月15号体检',
-  ];
-  const [phIndex, setPhIndex] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setPhIndex(i => (i + 1) % placeholders.length), 4000);
-    return () => clearInterval(t);
-  }, []);
-
-  // 语音状态
-  const [isRecording, setIsRecording] = useState(false);
-  const [willCancel, setWillCancel] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const micBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const isOnline = !!user && !!token;
 
@@ -205,6 +216,9 @@ export default function Home() {
 
     const savedToken = localStorage.getItem('schedule_token');
     if (savedToken) setToken(savedToken);
+
+    const savedGroups = localStorage.getItem('schedule_import_groups');
+    if (savedGroups) { try { setImportGroups(JSON.parse(savedGroups)); } catch { /* ignore */ } }
   }, []);
 
   useEffect(() => {
@@ -245,19 +259,12 @@ export default function Home() {
       const { events: cloudEvents } = await api(`/events${qs}`, {}, token);
 
       setEvents(prev => {
-        if (!since) {
-          // 全量同步：云端为准
-          return cloudEvents.map((ce: { id: string; title: string; date: string; time: string; raw: string; updated_at: number }) => ({
-            id: ce.id, title: ce.title, date: ce.date, time: ce.time,
-            raw: ce.raw || '', updatedAt: ce.updated_at
-          }));
-        }
-        // 增量同步：合并
+        // 全量+增量统一用合并：本地新数据不会被云端的旧数据覆盖
         const map = new Map(prev.map(e => [e.id, e]));
         for (const ce of cloudEvents) {
           const local = map.get(ce.id);
           if (!local || ce.updated_at > local.updatedAt) {
-            map.set(ce.id, { id: ce.id, title: ce.title, date: ce.date, time: ce.time, raw: ce.raw || '', updatedAt: ce.updated_at });
+            map.set(ce.id, { id: ce.id, title: ce.title, date: ce.date, time: ce.time || '', raw: ce.raw || '', type: (ce.type || 'event') as 'event' | 'task', completed: !!ce.completed, updatedAt: ce.updated_at });
           }
         }
         return Array.from(map.values());
@@ -273,7 +280,7 @@ export default function Home() {
       if (method === 'DELETE') {
         await api(`/events/${event.id}`, { method: 'DELETE' }, token);
       } else if (method === 'PUT') {
-        await api(`/events/${event.id}`, { method: 'PUT', body: JSON.stringify({ title: event.title, date: event.date, time: event.time, raw: event.raw, updatedAt: event.updatedAt }) }, token);
+        await api(`/events/${event.id}`, { method: 'PUT', body: JSON.stringify({ title: event.title, date: event.date, time: event.time, raw: event.raw, updatedAt: event.updatedAt, type: event.type, completed: event.completed }) }, token);
       } else {
         await api('/events', { method: 'POST', body: JSON.stringify(event) }, token);
       }
@@ -342,97 +349,7 @@ export default function Home() {
     } catch { /* fallback */ }
   };
 
-  // ==================== 语音识别 ====================
-
-  const speechSupported = typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-
-  const startRecording = useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
-    const r = new SR();
-    r.lang = 'zh-CN';
-    r.interimResults = false;
-    r.continuous = false;
-
-    r.onresult = (e: SpeechRecognitionEvent) => {
-      setInputText(e.results[0][0].transcript);
-    };
-
-    r.onerror = () => { setIsRecording(false); setWillCancel(false); };
-    r.onend = () => { setIsRecording(false); setWillCancel(false); };
-
-    r.start();
-    recognitionRef.current = r;
-    setIsRecording(true);
-    setWillCancel(false);
-  }, []);
-
-  const stopRecording = useCallback(() => {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-    setIsRecording(false);
-  }, []);
-
-  // 移动端用 touch，桌面端用 pointer
-  const pressStart = (e: React.TouchEvent | React.PointerEvent) => {
-    e.preventDefault();
-    startRecording();
-  };
-
-  const pressEnd = (e: React.TouchEvent | React.PointerEvent) => {
-    e.preventDefault();
-    if (willCancel) { stopRecording(); setWillCancel(false); return; }
-    stopRecording();
-    // 语音识别结果填入输入框，不自动提交——让用户确认后再发送
-  };
-
-  const pressMove = (e: React.PointerEvent | React.TouchEvent) => {
-    if (!isRecording || !micBtnRef.current) return;
-    const btn = micBtnRef.current;
-    const rect = btn.getBoundingClientRect();
-    const margin = 50;
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const outside = clientX < rect.left - margin || clientX > rect.right + margin ||
-                    clientY < rect.top - margin || clientY > rect.bottom + margin;
-    setWillCancel(outside);
-  };
-
   // ==================== 日程操作 ====================
-
-  const handleSubmit = useCallback(async () => {
-    if (isProcessing || !inputText.trim()) return;
-    setIsProcessing(true);
-
-    const lines = inputText.trim().split('\n').map(s => s.trim()).filter(Boolean);
-    if (lines.length === 0) { setIsProcessing(false); return; }
-
-    const newEvents: ScheduleEvent[] = [];
-    for (const line of lines) {
-      const smartDate = parseSmartDate(line);
-      const date = smartDate || new Date(selectedDate);
-      const timeObj = extractTime(line);
-
-      const title = line
-        .replace(/今天|明天|后天|大后天|下周|本周|\d{1,2}[号日]|(上午|下午|晚上|早上)?\s*\d{1,2}\s*[点:：]\s*\d{0,2}\s*[分]?|\d+天后|\d+月\d+[号日]|下个月\d+[号日]/g, '')
-        .trim() || '新日程';
-
-      newEvents.push({
-        id: crypto.randomUUID(),
-        title,
-        date: formatLocalDate(date),
-        time: timeObj.str,
-        raw: line,
-        updatedAt: Date.now(),
-      });
-    }
-
-    setEvents(prev => [...prev, ...newEvents]);
-    setInputText('');
-    setIsProcessing(false);
-    setDetailDate(formatLocalDate(selectedDate));
-    if (isOnline && token) newEvents.forEach(e => pushToCloud(e, 'POST'));
-  }, [inputText, isProcessing, selectedDate, isOnline, token]);
 
   const startEdit = (event: ScheduleEvent) => {
     setEditingEventId(event.id);
@@ -441,13 +358,16 @@ export default function Home() {
 
   const saveEdit = async () => {
     if (!editingEventId) return;
+    const existing = events.find(e => e.id === editingEventId);
     const updated: ScheduleEvent = {
       id: editingEventId,
       title: editForm.title,
       date: editForm.date,
       time: editForm.time,
-      raw: events.find(e => e.id === editingEventId)?.raw || '',
+      raw: existing?.raw || '',
       updatedAt: Date.now(),
+      type: existing?.type || 'event',
+      completed: existing?.completed || false,
     };
 
     if (isOnline && token) await pushToCloud(updated, 'PUT');
@@ -464,13 +384,279 @@ export default function Home() {
     setEvents(prev => prev.filter(e => e.id !== id));
   };
 
+  const toggleTaskCompleted = async (id: string) => {
+    setEvents(prev => prev.map(e => e.id === id ? { ...e, completed: !e.completed, updatedAt: Date.now() } : e));
+    if (isOnline && token) {
+      try { await api(`/events/${id}/toggle`, { method: 'PUT' }, token); } catch { /* ignore */ }
+    }
+  };
+
   const handleExport = () => {
     const sorted = [...events].sort((a, b) => a.date.localeCompare(b.date));
     const rows = sorted.map(e => [e.date, e.time, e.title, e.raw]);
-    const csv = ['﻿日期,时间,事项,原始输入', ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
+    const csv = ['﻿日期,开始时间,事项,备注', ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `日程表_${formatLocalDate(new Date())}.csv`; a.click();
+  };
+
+  const generateCsvTemplate = () => {
+    const sample = [
+      '日期,开始时间,事项,备注',
+      '2026-07-20,08:50,初始训练-模拟航班,青浦B777经济静态舱',
+      '2026-07-21,12:50,团队周会,C楼201',
+      '2026-07-22,,整理文档',
+    ].join('\n');
+    const blob = new Blob(['﻿' + sample], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'schedule_template.csv'; a.click();
+  };
+
+  const parseImportFile = async (file: File) => {
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext === 'csv') {
+        setImportText(await file.text());
+      } else if (ext === 'xlsx') {
+        const buf = await file.arrayBuffer();
+        const wb = read(buf, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
+
+        // 智能检测表头映射到模板格式：日期,开始时间,事项,备注
+        let header: string[] | null = null;
+        let dataRows = rows;
+        if (rows[0] && rows[0].some(c => String(c).includes('日期') || String(c).includes('时间') || String(c).includes('事项') || String(c).includes('内容'))) {
+          header = rows[0].map(c => String(c));
+          dataRows = rows.slice(1);
+        }
+
+        const findCol = (ks: string[]) => {
+          if (!header) return -1;
+          return header.findIndex(c => ks.some(k => c.includes(k)));
+        };
+        const idxD = findCol(['日期']);
+        const idxT = findCol(['开始时间', '时间']);
+        const idxC = findCol(['内容', '事项', '日程', '标题']);
+        const idxN = findCol(['地点', '备注', '描述']);
+
+        const csvLines = ['日期,开始时间,事项,备注'];
+        for (const r of dataRows) {
+          const s = r.map(c => String(c ?? '').trim());
+          if (s.every(c => !c)) continue;
+          const date = idxD >= 0 ? s[idxD] : s[0] || '';
+          const time = idxT >= 0 ? s[idxT] : s[1] || '';
+          const content = idxC >= 0 ? s[idxC] : s[2] || '';
+          const note = idxN >= 0 ? s[idxN] : s[3] || '';
+          if (!date && !content) continue;
+          csvLines.push([date, time, content, note].map(c => c.includes(',') ? `"${c}"` : c).join(','));
+        }
+        setImportText(csvLines.join('\n'));
+      } else {
+        alert('仅支持 .csv 和 .xlsx 文件'); return;
+      }
+    } catch { alert('文件读取失败'); }
+  };
+
+  const parseImportText = () => {
+    const lines = importText.replace(/^﻿/, '').split('\n').map(l => l.trim()).filter(Boolean);
+    // 跳过表头
+    const startIdx = lines[0]?.startsWith('日期') ? 1 : 0;
+    const preview: ScheduleEvent[] = [];
+
+    for (let i = startIdx; i < lines.length; i++) {
+      const cells = parseCsvLine(lines[i]);
+      const colDate = cells[0] || '', colTime = cells[1] || '', colTitle = cells[2] || '', colNote = cells[3] || '';
+      const title = colTitle || '未命名';
+
+      const smartDate = parseSmartDate(colNote || colTitle);
+      const timeObj = extractTime(colNote || colTitle);
+      const isTask = !colTime && !smartDate && !timeObj.matched;
+
+      let date = colDate;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        date = smartDate ? formatLocalDate(smartDate) : formatLocalDate(new Date());
+      }
+      let time = colTime;
+      if (!/^\d{2}:\d{2}$/.test(time)) {
+        time = timeObj.matched ? timeObj.str : (isTask ? '' : '09:00');
+      }
+
+      preview.push({
+        id: crypto.randomUUID(), title, date, time,
+        raw: colNote || colTitle, updatedAt: Date.now(),
+        type: isTask ? 'task' : 'event', completed: false,
+      });
+    }
+
+    if (preview.length === 0) { alert('未识别到有效数据'); return; }
+    setImportPreview(preview);
+  };
+
+  const confirmImport = () => {
+    if (!importPreview) return;
+    setEvents(prev => {
+      const existing = new Set(prev.map(e => `${e.date}|${e.time}|${e.title}`));
+      const deduped = importPreview.filter(e => !existing.has(`${e.date}|${e.time}|${e.title}`));
+      const added = [...prev, ...deduped];
+      if (isOnline && token) deduped.forEach(e => pushToCloud(e, 'POST'));
+      // 保存导入历史
+      const group = { id: crypto.randomUUID(), name: `导入 ${new Date().toLocaleDateString('zh-CN')}`, count: deduped.length, time: new Date().toISOString() };
+      const groups = [group, ...importGroups].slice(0, 20);
+      setImportGroups(groups);
+      localStorage.setItem('schedule_import_groups', JSON.stringify(groups));
+      return added;
+    });
+    setImportPreview(null);
+    setShowImportModal(false);
+  };
+
+  const deleteImportGroup = (id: string) => {
+    const groups = importGroups.filter(g => g.id !== id);
+    setImportGroups(groups);
+    localStorage.setItem('schedule_import_groups', JSON.stringify(groups));
+  };
+
+  // ==================== AI 对话框 ====================
+
+  const AI_BRANDS: Record<string, { name: string; endpoint: string; platform: string; billing: string; models: { id: string; label: string; price: string }[] }> = {
+    deepseek: {
+      name: 'DeepSeek', endpoint: 'https://api.deepseek.com/v1/chat/completions', platform: 'https://platform.deepseek.com', billing: 'https://platform.deepseek.com/usage',
+      models: [
+        { id: 'deepseek-v4-flash', label: 'V4 Flash', price: '¥1.0/百万token' },
+        { id: 'deepseek-v4-pro', label: 'V4 Pro', price: '¥3.1/百万token' },
+      ],
+    },
+    kimi: {
+      name: 'Kimi 月之暗面', endpoint: 'https://api.moonshot.cn/v1/chat/completions', platform: 'https://platform.kimi.com', billing: 'https://platform.kimi.com/console/account',
+      models: [
+        { id: 'kimi-k2.6', label: 'K2.6', price: '¥4.3/百万token' },
+      ],
+    },
+    doubao: {
+      name: '豆包', endpoint: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions', platform: 'https://console.volcengine.com/ark', billing: 'https://console.volcengine.com/ark/region:ark+cn-beijing/billing',
+      models: [
+        { id: 'doubao-pro', label: 'Pro', price: '¥2.0/百万token' },
+        { id: 'doubao-lite', label: 'Lite', price: '¥0.8/百万token' },
+      ],
+    },
+    qwen: {
+      name: '通义千问', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', platform: 'https://dashscope.console.aliyun.com', billing: 'https://dashscope.console.aliyun.com/billing',
+      models: [
+        { id: 'qwen-turbo', label: 'Turbo', price: '¥2.0/百万token' },
+        { id: 'qwen-plus', label: 'Plus', price: '¥4.0/百万token' },
+      ],
+    },
+    glm: {
+      name: '智谱 GLM', endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', platform: 'https://open.bigmodel.cn', billing: 'https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys',
+      models: [
+        { id: 'glm-4-flash', label: 'GLM-4 Flash', price: '¥0.1/百万token' },
+      ],
+    },
+  };
+
+  useEffect(() => {
+    const saved = localStorage.getItem('schedule_ai_config');
+    if (saved) { try { setAiConfig(JSON.parse(saved)); } catch { /* ignore */ } }
+  }, []);
+
+  const SYSTEM_PROMPT = `你是菠萝日程的AI助手。根据用户输入，返回JSON格式的日程操作。
+
+操作类型：
+1. { "action": "create", "events": [{ "date": "YYYY-MM-DD", "time": "HH:mm或不填", "title": "事项", "note": "备注", "type": "event或task" }] }
+2. { "action": "query", "message": "查询结果文本" }
+3. { "action": "chat", "message": "闲聊回复文本" }
+
+规则：
+- 有明确时间/日期的归类为event，仅提到"今天/明天做XX"无具体时间的归为task（time不填）
+- 如果用户只是聊天或问问题，用chat或query
+- 只返回JSON，不返回其他内容`;
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+      setIsRecording(false);
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const r = new SR();
+    r.lang = 'zh-CN';
+    r.interimResults = false;
+    r.continuous = false;
+    r.onresult = (e: SpeechRecognitionEvent) => {
+      setChatInput(prev => prev + e.results[0][0].transcript);
+    };
+    r.onerror = () => setIsRecording(false);
+    r.onend = () => setIsRecording(false);
+    r.start();
+    recognitionRef.current = r;
+    setIsRecording(true);
+  };
+
+  const sendChat = async () => {
+    if (!chatInput.trim() || chatLoading) return;
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setChatLoading(true);
+
+    try {
+      const brand = AI_BRANDS[aiConfig.brand] || AI_BRANDS.deepseek;
+      const res = await fetch(brand.endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiConfig.key}` },
+        body: JSON.stringify({
+          model: aiConfig.model,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            ...chatMessages.map(m => ({ role: m.role, content: m.content })),
+            { role: 'user', content: userMsg },
+          ],
+          temperature: 0.3,
+        }),
+      });
+      const data = await res.json();
+      const raw = data.choices?.[0]?.message?.content || '';
+      // 尝试解析JSON响应
+      let parsed: { action: string; events?: Array<{ date: string; time: string; title: string; note?: string; type: string }>; message?: string };
+      try {
+        const jsonStr = raw.replace(/```json|```/g, '').trim();
+        parsed = JSON.parse(jsonStr);
+      } catch {
+        parsed = { action: 'chat', message: raw };
+      }
+
+      if (parsed.action === 'create' && parsed.events) {
+        const cards = parsed.events.map((ev: { date: string; time: string; title: string; note?: string; type: string }) => ({
+          date: ev.date, time: ev.time || '', title: ev.title,
+          type: (ev.type === 'task' ? 'task' : 'event') as 'event' | 'task',
+        }));
+        setChatMessages(prev => [...prev, {
+          role: 'assistant',
+          content: parsed.message || `已识别 ${cards.length} 条，请确认：`,
+          card: cards[0], // 简化：一次只展示第一张确认卡片
+        }]);
+      } else {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: parsed.message || raw }]);
+      }
+    } catch {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: '出错了，请检查AI设置中的Key是否正确。' }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const confirmAiCard = (card: { date: string; time: string; title: string; type: 'event' | 'task' }) => {
+    const ev: ScheduleEvent = {
+      id: crypto.randomUUID(), title: card.title, date: card.date, time: card.time,
+      raw: card.title, updatedAt: Date.now(), type: card.type, completed: false,
+    };
+    setEvents(prev => [...prev, ev]);
+    if (isOnline && token) pushToCloud(ev, 'POST');
+    setChatMessages(prev => prev.filter(m => !m.card)); // 移除确认卡片
+    setDetailDate(card.date);
   };
 
   // ==================== 日历渲染 ====================
@@ -484,7 +670,7 @@ export default function Home() {
     const days: React.ReactNode[] = [];
 
     for (let i = firstDay - 1; i >= 0; i--) {
-      days.push(<div key={`pv-${i}`} className="text-[#A0A0A0] text-center py-2 text-sm">{daysInPrevMonth - i}</div>);
+      days.push(<div key={`pv-${i}`} className="text-[#C0BDB8] text-center py-3 text-lg">{daysInPrevMonth - i}</div>);
     }
 
     const today = new Date();
@@ -497,8 +683,8 @@ export default function Home() {
 
       days.push(
         <button key={i} onClick={() => { setSelectedDate(d); setDetailDate(ds); }}
-          className={`relative py-2 text-sm rounded-xl transition-all duration-200
-            ${active ? 'bg-[#ED6A3B] text-white font-bold shadow-lg scale-105' : 'hover:bg-[#F3F1ED] text-[#5C5C5C]'}
+          className={`relative py-3 text-lg font-medium rounded-xl transition-all duration-200
+            ${active ? 'bg-[#ED6A3B] text-white font-bold shadow-lg scale-105' : 'hover:bg-[#F3F1ED] text-[#1C1C1C]'}
             ${isToday && !active ? 'border-2 border-[#ED6A3B] text-[#ED6A3B] font-bold bg-[#FFF5F0]' : ''}`}
           aria-label={`${month + 1}月${i}日`}>
           {i}
@@ -510,7 +696,11 @@ export default function Home() {
   };
 
   const dayEvents = (detailDate && isOnline)
-    ? events.filter(e => e.date === detailDate).sort((a, b) => a.time.localeCompare(b.time))
+    ? events.filter(e => e.date === detailDate && e.type !== 'task').sort((a, b) => a.time.localeCompare(b.time))
+    : [];
+  const dayTasks = (detailDate && isOnline)
+    ? events.filter(e => e.date === detailDate && e.type === 'task')
+        .sort((a, b) => (a.completed ? 1 : 0) - (b.completed ? 1 : 0) || b.updatedAt - a.updatedAt)
     : [];
 
   const weekDays = ['一', '二', '三', '四', '五', '六', '日'];
@@ -518,7 +708,7 @@ export default function Home() {
   // ==================== UI ====================
 
   return (
-    <main className="min-h-screen pb-44 bg-[#F7F5F2] flex flex-col">
+    <main className="min-h-screen pb-16 bg-[#F7F5F2] flex flex-col">
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>
@@ -549,12 +739,12 @@ export default function Home() {
       )}
 
       {/* Header */}
-      <header className="bg-white px-5 py-4 sticky top-0 z-50 border-b border-[#E8E4DF]">
-        <div className="flex justify-between items-center max-w-md mx-auto">
-          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight">
+      <header className="bg-white px-5 py-4 sm:py-5 sticky top-0 z-50 border-b border-[#E8E4DF]">
+        <div className="flex flex-wrap justify-between items-center gap-y-2 max-w-full mx-auto">
+          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight shrink-0">
             <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
           </h1>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap">
             <div className="relative group">
               <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${isOnline ? 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]' : 'bg-[#D9D4CF]'}`} />
               <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-[60] shadow-lg">
@@ -591,6 +781,10 @@ export default function Home() {
             <button onClick={handleExport}
               className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导出" title="导出CSV">
               <Download className="w-4 h-4 text-[#A0A0A0]" />
+            </button>
+            <button onClick={() => setShowAiSettings(true)}
+              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="AI设置" title="AI 连接设置">
+              <span className="text-base">⚙</span>
             </button>
             <button onClick={() => setShowFeedback(true)}
               className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="反馈" title="反馈建议">
@@ -761,6 +955,99 @@ export default function Home() {
         </div>
       )}
 
+      {/* 导入弹窗（两步模式） */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={() => { setShowImportModal(false); setImportPreview(null); }}>
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-lg" onClick={e => e.stopPropagation()}>
+            {importPreview ? (
+              /* 第二步：解析预览 */
+              <>
+                <div className="flex justify-between items-center p-5 border-b border-[#E8E4DF] shrink-0">
+                  <h2 className="font-semibold text-[#1C1C1C]">解析预览 · {importPreview.length} 条</h2>
+                  <button onClick={() => setImportPreview(null)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center">&times;</button>
+                </div>
+                <div className="overflow-y-auto p-5 space-y-3 flex-1">
+                  {importPreview.map((e, i) => (
+                    <div key={e.id} className="p-3 bg-[#F7F5F2] rounded-xl border border-[#E8E4DF] space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-[#A0A0A0] w-5 shrink-0">{i + 1}</span>
+                        <input value={e.title} onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], title: ev.target.value }; setImportPreview(next);
+                        }} className="flex-1 px-2 py-1 border border-[#E8E4DF] rounded text-sm bg-white outline-none focus:border-[#1C1C1C]" />
+                        <button onClick={() => setImportPreview(prev => prev!.filter((_, j) => j !== i))}
+                          className="text-[#A0A0A0] hover:text-red-500 px-1">&times;</button>
+                      </div>
+                      <div className="flex gap-2 items-center">
+                        <input type="date" value={e.date} onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], date: ev.target.value }; setImportPreview(next);
+                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C]" />
+                        <input type="time" value={e.time} onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], time: ev.target.value }; setImportPreview(next);
+                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-24" />
+                        <select value={e.type} onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], type: ev.target.value as 'event' | 'task', time: ev.target.value === 'task' ? '' : next[i].time }; setImportPreview(next);
+                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none">
+                          <option value="event">日程</option>
+                          <option value="task">任务</option>
+                        </select>
+                        <span className="text-xs text-[#A0A0A0] truncate flex-1">{e.raw}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 p-5 border-t border-[#E8E4DF] shrink-0">
+                  <button onClick={() => setImportPreview(null)}
+                    className="flex-1 h-11 rounded-lg border border-[#E8E4DF] text-sm text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors">返回修改</button>
+                  <button onClick={confirmImport}
+                    className="flex-1 h-11 bg-[#ED6A3B] text-white rounded-lg text-sm font-semibold hover:bg-[#D45D2E] transition-colors">确认导入 {importPreview.length} 条</button>
+                </div>
+              </>
+            ) : (
+              /* 第一步：输入原文 */
+              <>
+                <div className="flex justify-between items-center p-5 border-b border-[#E8E4DF] shrink-0">
+                  <h2 className="font-semibold text-[#1C1C1C]">导入日程</h2>
+                  <button onClick={() => setShowImportModal(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center">&times;</button>
+                </div>
+                <div className="p-5 space-y-4 flex-1 flex flex-col min-h-0">
+                  <p className="text-xs text-[#A0A0A0]">每行一条，格式：日期,开始时间,事项,备注（无时间的自动归为任务）</p>
+                  <textarea value={importText} onChange={e => setImportText(e.target.value)}
+                    placeholder={`2026-07-20,08:50,初始训练-模拟航班,青浦B777经济静态舱\n2026-07-21,12:50,团队周会,C楼201\n2026-07-22,,整理文档`}
+                    className="flex-1 w-full p-3 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C] resize-none font-mono" />
+                  <div className="flex gap-2">
+                    <label className="flex-1 h-11 rounded-lg border border-dashed border-[#D9D4CF] text-sm text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
+                      <Upload className="w-4 h-4" /> 上传 CSV / XLSX
+                      <input type="file" accept=".csv,.xlsx" onChange={e => { if (e.target.files?.[0]) parseImportFile(e.target.files[0]); e.target.value = ''; }} className="hidden" />
+                    </label>
+                    <button onClick={generateCsvTemplate}
+                      className="h-11 px-4 rounded-lg border border-[#E8E4DF] text-sm text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center gap-1.5">
+                      <Download className="w-4 h-4" /> 下载模板
+                    </button>
+                  </div>
+                  <button onClick={parseImportText} disabled={!importText.trim()}
+                    className="w-full h-11 bg-[#ED6A3B] text-white rounded-lg text-sm font-semibold hover:bg-[#D45D2E] disabled:opacity-40 transition-colors">解析预览</button>
+
+                  {/* 导入历史 */}
+                  {importGroups.length > 0 && (
+                    <div className="border-t border-[#E8E4DF] pt-3">
+                      <p className="text-xs text-[#A0A0A0] mb-2">导入历史</p>
+                      <div className="space-y-1 max-h-32 overflow-y-auto">
+                        {importGroups.map(g => (
+                          <div key={g.id} className="flex items-center justify-between text-xs text-[#5C5C5C] py-1">
+                            <span>{g.name} · {g.count} 条</span>
+                            <button onClick={() => deleteImportGroup(g.id)} className="text-[#A0A0A0] hover:text-red-500">&times;</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* 激活成功提示 */}
       {activateSuccess && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] bg-[#1C1C1C] text-white px-5 py-3 rounded-xl shadow-lg text-sm font-medium animate-bounce">
@@ -768,9 +1055,12 @@ export default function Home() {
         </div>
       )}
 
+      {/* 内容区：日程 + 日历并排 */}
+      <div className="flex-1 flex flex-col md:flex-row gap-3 mx-3 mt-3 overflow-hidden min-h-0">
+
       {/* Detail Card */}
       {detailDate && (
-        <div className="mx-4 mt-3 bg-white rounded-2xl p-5 shadow-sm border border-[#E8E4DF] order-2">
+        <div className="md:w-1/4 bg-white rounded-2xl p-4 shadow-sm border border-[#E8E4DF] overflow-y-auto">
           <div className="flex justify-between items-center mb-4">
             <h2 className="font-semibold text-[#1C1C1C]">{detailDate} 日程</h2>
             <button onClick={() => setDetailDate(null)}
@@ -778,65 +1068,133 @@ export default function Home() {
               ×
             </button>
           </div>
-          {dayEvents.length === 0 ? (
+          {dayEvents.length === 0 && dayTasks.length === 0 ? (
             <p className="text-[#A0A0A0] text-center py-8 text-sm">
               {isOnline ? '暂无日程，在下方输入' : '点击右上角激活同步后可查看日程'}
             </p>
           ) : (
-            <div className="space-y-3">
-              {dayEvents.map(e => (
-                <div key={e.id} className="p-3 bg-[#F7F5F2] rounded-xl border border-[#E8E4DF]">
-                  {editingEventId === e.id ? (
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-xs text-[#A0A0A0] mb-1 block">事项</label>
-                        <input type="text" value={editForm.title} onChange={ev => setEditForm({ ...editForm, title: ev.target.value })}
-                          className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                      </div>
-                      <div className="flex gap-3">
-                        <div className="flex-1">
-                          <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
-                          <input type="date" title="日期" value={editForm.date} onChange={ev => setEditForm({ ...editForm, date: ev.target.value })}
-                            className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+            <div className="space-y-4">
+              {/* 定时日程 */}
+              {dayEvents.length > 0 && (
+                <div className="space-y-2">
+                  {dayEvents.map(e => (
+                    <div key={e.id} className="p-3 bg-[#F7F5F2] rounded-xl border border-[#E8E4DF]">
+                      {editingEventId === e.id ? (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-xs text-[#A0A0A0] mb-1 block">事项</label>
+                            <input type="text" value={editForm.title} onChange={ev => setEditForm({ ...editForm, title: ev.target.value })}
+                              className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                          </div>
+                          <div className="flex gap-3">
+                            <div className="flex-1">
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
+                              <input type="date" title="日期" value={editForm.date} onChange={ev => setEditForm({ ...editForm, date: ev.target.value })}
+                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">时间</label>
+                              <input type="time" title="时间" value={editForm.time} onChange={ev => setEditForm({ ...editForm, time: ev.target.value })}
+                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                            </div>
+                          </div>
+                          <div className="flex gap-2 justify-end">
+                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '' }); }}
+                              className="px-4 py-1.5 text-sm text-[#5C5C5C] bg-[#E8E4DF] rounded-lg hover:bg-[#D9D4CF] transition-colors">取消</button>
+                            <button onClick={saveEdit} className="px-4 py-1.5 text-sm text-white bg-[#ED6A3B] rounded-lg hover:bg-[#D45D2E] transition-colors">保存</button>
+                          </div>
                         </div>
-                        <div className="flex-1">
-                          <label className="text-xs text-[#A0A0A0] mb-1 block">时间</label>
-                          <input type="time" title="时间" value={editForm.time} onChange={ev => setEditForm({ ...editForm, time: ev.target.value })}
-                            className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          <span className="bg-[#ED6A3B] text-white text-sm px-3 py-1.5 rounded-lg font-mono font-semibold min-w-[60px] text-center">{e.time}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-[#1C1C1C] truncate">{e.title}</div>
+                            <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">{e.raw}</div>
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={() => startEdit(e)} className="p-2 text-[#A0A0A0] hover:text-[#ED6A3B] hover:bg-[#FFF5F0] rounded-lg transition-colors" aria-label="编辑">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                            </button>
+                            <button onClick={() => deleteEvent(e.id)} className="p-2 text-[#A0A0A0] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" aria-label="删除">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex gap-2 justify-end">
-                        <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '' }); }}
-                          className="px-4 py-1.5 text-sm text-[#5C5C5C] bg-[#E8E4DF] rounded-lg hover:bg-[#D9D4CF] transition-colors">取消</button>
-                        <button onClick={saveEdit} className="px-4 py-1.5 text-sm text-white bg-[#ED6A3B] rounded-lg hover:bg-[#D45D2E] transition-colors">保存</button>
-                      </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="flex items-center gap-3">
-                      <span className="bg-[#ED6A3B] text-white text-sm px-3 py-1.5 rounded-lg font-mono font-semibold min-w-[60px] text-center">{e.time}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-[#1C1C1C] truncate">{e.title}</div>
-                        <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">{e.raw}</div>
-                      </div>
-                      <div className="flex gap-1">
-                        <button onClick={() => startEdit(e)} className="p-2 text-[#A0A0A0] hover:text-[#ED6A3B] hover:bg-[#FFF5F0] rounded-lg transition-colors" aria-label="编辑">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                        </button>
-                        <button onClick={() => deleteEvent(e.id)} className="p-2 text-[#A0A0A0] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" aria-label="删除">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  ))}
                 </div>
-              ))}
+              )}
+
+              {/* 分隔线 */}
+              {dayEvents.length > 0 && dayTasks.length > 0 && (
+                <div className="border-t border-[#E8E4DF]" />
+              )}
+
+              {/* 当日任务 */}
+              {dayTasks.length > 0 && (
+                <div className="space-y-1.5">
+                  {dayTasks.map(e => (
+                    <div key={e.id} className={`p-3 rounded-xl border border-[#E8E4DF] transition-colors ${e.completed ? 'bg-[#F7F5F2]/50' : 'bg-[#F7F5F2]'}`}>
+                      {editingEventId === e.id ? (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-xs text-[#A0A0A0] mb-1 block">任务名称</label>
+                            <input type="text" value={editForm.title} onChange={ev => setEditForm({ ...editForm, title: ev.target.value })}
+                              className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                          </div>
+                          <div className="flex gap-3">
+                            <div className="flex-1">
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
+                              <input type="date" title="日期" value={editForm.date} onChange={ev => setEditForm({ ...editForm, date: ev.target.value })}
+                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                            </div>
+                          </div>
+                          <div className="flex gap-2 justify-end">
+                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '' }); }}
+                              className="px-4 py-1.5 text-sm text-[#5C5C5C] bg-[#E8E4DF] rounded-lg hover:bg-[#D9D4CF] transition-colors">取消</button>
+                            <button onClick={saveEdit} className="px-4 py-1.5 text-sm text-white bg-[#ED6A3B] rounded-lg hover:bg-[#D45D2E] transition-colors">保存</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          <button onClick={() => toggleTaskCompleted(e.id)}
+                            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
+                              e.completed
+                                ? 'bg-[#ED6A3B] border-[#ED6A3B]'
+                                : 'border-[#D9D4CF] hover:border-[#ED6A3B]'
+                            }`}>
+                            {e.completed && (
+                              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <div className={`font-medium truncate ${e.completed ? 'line-through text-[#A0A0A0]' : 'text-[#1C1C1C]'}`}>{e.title}</div>
+                            {e.raw && <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>{e.raw}</div>}
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={() => startEdit(e)} className="p-2 text-[#A0A0A0] hover:text-[#ED6A3B] hover:bg-[#FFF5F0] rounded-lg transition-colors" aria-label="编辑">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                            </button>
+                            <button onClick={() => deleteEvent(e.id)} className="p-2 text-[#A0A0A0] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" aria-label="删除">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
       {/* Calendar */}
-      <div className="mx-4 mt-3 bg-white rounded-2xl p-5 shadow-sm border border-[#E8E4DF] order-1">
+      <div className={`bg-white rounded-2xl p-5 shadow-sm border border-[#E8E4DF] overflow-y-auto ${detailDate ? 'md:w-3/4' : 'md:w-full'}`}>
         <div className="flex justify-between items-center mb-5">
           <h2 className="text-lg font-bold text-[#1C1C1C]">
             {currentDate.getFullYear()}年{currentDate.getMonth() + 1}月
@@ -862,48 +1220,198 @@ export default function Home() {
         </div>
       </div>
 
-      {/* 底部输入栏 */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-lg px-4 py-4 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.15)] rounded-t-3xl border-t border-white/30 z-50">
-        {/* 录音状态提示 */}
-        {isRecording && (
-          <div className={`text-center mb-3 text-sm font-medium transition-colors ${willCancel ? 'text-red-500' : 'text-[#ED6A3B] animate-pulse'}`}>
-            {willCancel ? '松开取消' : '正在听...'}
-          </div>
-        )}
-
-        <div className="flex items-center gap-2 bg-[#F3F1ED]/80 p-1.5 rounded-2xl border border-transparent focus-within:border-[#ED6A3B] focus-within:bg-white transition-all duration-300">
-          <input type="text" value={inputText} onChange={e => setInputText(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-            placeholder={placeholders[phIndex]}
-            className="flex-1 bg-transparent px-3 py-2.5 text-[#1C1C1C] outline-none text-base placeholder:text-[#A0A0A0]" />
-
-          {/* 麦克风按钮（仅 Chrome/Edge 显示） */}
-          {speechSupported && (
-            <button ref={micBtnRef}
-              onPointerDown={pressStart}
-              onPointerUp={pressEnd}
-              onPointerMove={pressMove}
-              onPointerLeave={pressEnd}
-              onTouchStart={pressStart}
-              onTouchEnd={pressEnd}
-              onTouchMove={pressMove}
-              onContextMenu={e => e.preventDefault()}
-              className={`w-14 h-14 rounded-full flex items-center justify-center transition-all select-none touch-none
-                ${isRecording
-                  ? willCancel ? 'bg-red-500 scale-110' : 'bg-red-500 animate-pulse scale-110'
-                  : 'bg-[#E8E4DF] hover:bg-[#D9D4CF] text-[#5C5C5C]'}`}
-              aria-label="按住说话">
-              <Mic className={`w-6 h-6 ${isRecording ? 'text-white' : ''}`} />
-            </button>
-          )}
-
-          <button onClick={handleSubmit} disabled={isProcessing || !inputText.trim()}
-            className="w-14 h-14 bg-[#ED6A3B] hover:bg-[#D45D2E] disabled:opacity-40 rounded-full text-white flex items-center justify-center transition-all shadow-lg shadow-[#ED6A3B]/20"
-            aria-label="发送">
-            <Send className="w-6 h-6" />
-          </button>
-        </div>
       </div>
+
+      {/* 浮动切换按钮 */}
+      {!showChat && (
+        <button onClick={() => setShowChat(true)}
+          className="fixed bottom-28 right-4 z-50 w-14 h-14 bg-[#1C1C1C] text-white rounded-2xl shadow-lg hover:bg-[#333] transition-all flex items-center justify-center">
+          <MessageCircle className="w-6 h-6" />
+        </button>
+      )}
+
+      {/* AI 对话框 */}
+      {showChat && (
+        <div className="fixed inset-x-0 bottom-0 z-50 flex flex-col" style={{ height: '66vh' }}
+          onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
+          onDrop={e => { e.preventDefault(); e.stopPropagation(); const file = e.dataTransfer.files?.[0]; if (file) { parseImportFile(file); setShowImportModal(true); } }}>
+          {/* 日历遮罩（点击关闭） */}
+          <div className="absolute inset-0 -z-10" onClick={() => setShowChat(false)} />
+
+          <div className="flex-1 flex flex-col bg-white rounded-t-2xl shadow-[0_-10px_40px_rgba(0,0,0,0.15)] animate-slide-up">
+            {/* 对话框 Header */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-[#E8E4DF] shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm text-[#1C1C1C]">AI 助理</span>
+                {aiConfig.key ? (
+                  <span className="text-xs text-[#A0A0A0]">{AI_BRANDS[aiConfig.brand]?.name} · {aiConfig.model}</span>
+                ) : (
+                  <span className="text-xs text-red-400">未设置 API Key</span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                {aiConfig.key && (
+                  <a href={AI_BRANDS[aiConfig.brand]?.billing || '#'} target="_blank" rel="noopener"
+                    className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center text-xs" title="查看费用明细">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" strokeWidth={2}/><path d="M12 9v4M12 17h.01" strokeWidth={2.5} strokeLinecap="round"/></svg>
+                  </a>
+                )}
+                <button onClick={() => setShowChat(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center"><X className="w-4 h-4" /></button>
+              </div>
+            </div>
+
+            {/* 消息区 */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {chatMessages.length === 0 && (
+                <p className="text-[#A0A0A0] text-sm text-center py-8">和菠萝聊聊你的日程吧</p>
+              )}
+              {chatMessages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
+                    m.role === 'user' ? 'bg-[#ED6A3B] text-white' : 'bg-[#F3F1ED] text-[#1C1C1C]'
+                  }`}>
+                    <p className="whitespace-pre-wrap">{m.content}</p>
+                    {m.card && (
+                      <div className="mt-2 p-3 bg-white rounded-xl border border-[#E8E4DF]">
+                        <div className="text-xs text-[#5C5C5C] space-y-0.5 mb-2">
+                          <div>{m.card.date} {m.card.time || '全天'}</div>
+                          <div className="font-medium text-[#1C1C1C]">{m.card.title}</div>
+                          <div className="text-[#A0A0A0]">{m.card.type === 'task' ? '任务' : '日程'}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => setChatMessages(prev => prev.filter((_, j) => j !== i))}
+                            className="flex-1 h-8 text-xs border border-[#E8E4DF] rounded-lg hover:bg-[#F3F1ED]">取消</button>
+                          <button onClick={() => { confirmAiCard(m.card!); setChatMessages(prev => prev.filter((_, j) => j !== i)); }}
+                            className="flex-1 h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E]">确认添加</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-[#F3F1ED] rounded-2xl px-4 py-2.5">
+                    <div className="flex gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-[#D9D4CF] animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-[#D9D4CF] animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-[#D9D4CF] animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 输入区 */}
+            <div className="px-4 py-3 border-t border-[#E8E4DF] shrink-0">
+              <div className="flex items-center gap-2 bg-[#F3F1ED] p-1.5 rounded-2xl">
+                {/* ＋上传 */}
+                <div className="relative">
+                  <button onClick={() => setShowPlusMenu(!showPlusMenu)}
+                    className="w-10 h-10 rounded-xl hover:bg-[#E8E4DF] text-[#5C5C5C] flex items-center justify-center shrink-0 transition-colors">
+                    <Plus className="w-5 h-5" />
+                  </button>
+                  {showPlusMenu && (
+                    <div className="absolute bottom-12 left-0 bg-white rounded-2xl shadow-xl border border-[#E8E4DF] py-2 min-w-[140px] z-[60] animate-slide-up" onClick={() => setShowPlusMenu(false)}>
+                      <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
+                        <svg className="w-5 h-5 text-[#ED6A3B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2}/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" strokeWidth={2}/></svg>
+                        照片
+                        <input ref={photoInputRef} type="file" accept="image/*" capture="environment" onChange={e => { if (e.target.files?.[0]) { setImportText(e.target.files[0].name); setShowImportModal(true); } e.target.value = ''; }} className="hidden" />
+                      </label>
+                      <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
+                        <svg className="w-5 h-5 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                        文件
+                        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.pdf,.txt" onChange={e => { if (e.target.files?.[0]) { parseImportFile(e.target.files[0]); setShowImportModal(true); } e.target.value = ''; }} className="hidden" />
+                      </label>
+                      <button onClick={() => { generateCsvTemplate(); setShowPlusMenu(false); }}
+                        className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] w-full text-left text-sm text-[#1C1C1C]">
+                        <svg className="w-5 h-5 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1" strokeWidth={2}/><path d="M3 5h18M8 5v16M3 10h18" strokeWidth={2}/></svg>
+                        模板
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {/* 语音 */}
+                <button onClick={toggleRecording}
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all ${
+                    isRecording ? 'bg-red-500 text-white animate-pulse' : 'hover:bg-[#E8E4DF] text-[#5C5C5C]'
+                  }`}>
+                  <Mic className="w-5 h-5" />
+                </button>
+                <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && sendChat()}
+                  placeholder="和菠萝聊聊日程..." disabled={!aiConfig.key}
+                  className="flex-1 bg-transparent px-2 py-2.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#A0A0A0] disabled:opacity-40" />
+                <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading || !aiConfig.key}
+                  className="w-10 h-10 bg-[#ED6A3B] hover:bg-[#D45D2E] disabled:opacity-40 rounded-xl text-white flex items-center justify-center shrink-0 transition-all">
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI 设置弹窗 */}
+      {showAiSettings && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={() => setShowAiSettings(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-5">
+              <h2 className="font-semibold text-[#1C1C1C]">AI 连接设置</h2>
+              <button onClick={() => setShowAiSettings(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center">&times;</button>
+            </div>
+
+            {/* 品牌选择（卡片式） */}
+            <label className="text-xs text-[#A0A0A0] mb-2 block">选择品牌</label>
+            <div className="space-y-1.5 mb-4">
+              {Object.entries(AI_BRANDS).map(([k, b]) => (
+                <button key={k} onClick={() => { const m = b.models[0]?.id || ''; const c = { ...aiConfig, brand: k, model: m }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
+                  className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
+                    aiConfig.brand === k ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
+                  }`}>
+                  <div className="text-left">
+                    <div className="text-sm font-medium text-[#1C1C1C]">{b.name}</div>
+                    <div className="text-xs text-[#A0A0A0] mt-0.5">{b.models.map(m => m.label).join(' / ')} · {b.models[0]?.price}</div>
+                  </div>
+                  <a href={b.platform} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                    className="text-xs text-[#A0A0A0] hover:text-[#ED6A3B] underline shrink-0 ml-2">官网</a>
+                </button>
+              ))}
+            </div>
+
+            {/* 模型选择 */}
+            <label className="text-xs text-[#A0A0A0] mb-2 block">模型版本</label>
+            <div className="space-y-1.5 mb-4">
+              {(AI_BRANDS[aiConfig.brand]?.models || []).map(m => (
+                <button key={m.id} onClick={() => { const c = { ...aiConfig, model: m.id }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
+                  className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
+                    aiConfig.model === m.id ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
+                  }`}>
+                  <div className="text-left">
+                    <div className="text-sm font-medium text-[#1C1C1C]">{m.label}</div>
+                    <div className="text-xs text-[#A0A0A0]">{m.id}</div>
+                  </div>
+                  <span className="text-xs text-[#5C5C5C]">{m.price}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* API Key */}
+            <label className="text-xs text-[#A0A0A0] mb-2 block">API Key</label>
+            <div className="flex gap-2 mb-4">
+              <input type="password" value={aiConfig.key} onChange={e => { const c = { ...aiConfig, key: e.target.value }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
+                placeholder="sk-..." className="flex-1 px-3 py-2.5 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+              <a href={AI_BRANDS[aiConfig.brand]?.billing || '#'} target="_blank" rel="noopener"
+                className="shrink-0 h-10 px-3 rounded-lg border border-[#E8E4DF] text-xs text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center gap-1">
+                费用明细 ↗
+              </a>
+            </div>
+
+            <button onClick={() => setShowAiSettings(false)}
+              className="w-full h-11 bg-[#1C1C1C] text-white rounded-lg text-sm font-semibold hover:bg-[#333] transition-colors">完成</button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
