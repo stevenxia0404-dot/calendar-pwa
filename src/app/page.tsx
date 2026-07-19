@@ -417,7 +417,7 @@ export default function Home() {
       const ext = file.name.split('.').pop()?.toLowerCase();
       if (ext === 'csv') {
         setImportText(await file.text());
-      } else if (ext === 'xlsx') {
+      } else if (ext === 'xlsx' || ext === 'xls') {
         const buf = await file.arrayBuffer();
         const wb = read(buf, { type: 'array' });
         const ws = wb.Sheets[wb.SheetNames[0]];
@@ -457,6 +457,32 @@ export default function Home() {
         setImportText(await file.text());
       }
     } catch { alert('文件读取失败'); }
+  };
+
+  // 上传文件/图片 → 直接进聊天
+  const uploadToChat = async (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    try {
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          setChatMessages(prev => [...prev, { role: 'user', content: `[图片: ${file.name}]` }]);
+        };
+        reader.readAsDataURL(file);
+      } else if (ext === 'xlsx' || ext === 'xls') {
+        const buf = await file.arrayBuffer();
+        const wb = read(buf, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
+        const text = rows.map(r => r.map(c => String(c ?? '').trim()).join(',')).join('\n');
+        setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
+      } else {
+        const text = await file.text();
+        setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
+      }
+    } catch {
+      setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name} 读取失败]` }]);
+    }
   };
 
   const parseImportText = () => {
@@ -1251,7 +1277,7 @@ export default function Home() {
       {showChat && (
         <div className="fixed inset-x-0 bottom-0 z-50 flex flex-col" style={{ height: '66vh' }}
           onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
-          onDrop={e => { e.preventDefault(); e.stopPropagation(); const file = e.dataTransfer.files?.[0]; if (file) { parseImportFile(file); setShowImportModal(true); } }}>
+          onDrop={e => { e.preventDefault(); e.stopPropagation(); const file = e.dataTransfer.files?.[0]; if (file) uploadToChat(file); }}>
           {/* 日历遮罩（点击关闭） */}
           <div className="absolute inset-0 -z-10" onClick={() => setShowChat(false)} />
 
@@ -1333,12 +1359,12 @@ export default function Home() {
                       <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
                         <svg className="w-5 h-5 text-[#ED6A3B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2}/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" strokeWidth={2}/></svg>
                         照片
-                        <input ref={photoInputRef} type="file" accept="image/*" capture="environment" onChange={e => { if (e.target.files?.[0]) { setImportText(e.target.files[0].name); setShowImportModal(true); } e.target.value = ''; }} className="hidden" />
+                        <input ref={photoInputRef} type="file" accept="image/*" capture="environment" onChange={e => { if (e.target.files?.[0]) { uploadToChat(e.target.files[0]); setShowPlusMenu(false); } e.target.value = ''; }} className="hidden" />
                       </label>
                       <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
                         <svg className="w-5 h-5 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
                         文件
-                        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf,.txt,.docx,.ics,.json" onChange={e => { if (e.target.files?.[0]) { parseImportFile(e.target.files[0]); setShowImportModal(true); } e.target.value = ''; }} className="hidden" />
+                        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf,.txt,.docx,.ics,.json" onChange={e => { if (e.target.files?.[0]) { uploadToChat(e.target.files[0]); setShowPlusMenu(false); } e.target.value = ''; }} className="hidden" />
                       </label>
                       <button onClick={() => { generateCsvTemplate(); setShowPlusMenu(false); }}
                         className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] w-full text-left text-sm text-[#1C1C1C]">
