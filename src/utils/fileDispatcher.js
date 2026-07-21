@@ -25,12 +25,12 @@ export async function dispatchFileTask(file) {
     };
   }
 
-  // PDF → Worker 提取文字
+  // PDF → 主线程 pdfjs-dist 提取文字
   if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
     if (sizeMB > FILE_CONFIG.MAX_PDF_MB) {
       throw new Error(`PDF_TOO_LARGE: 最大支持 ${FILE_CONFIG.MAX_PDF_MB}MB`);
     }
-    const text = await executePdfWorker(file);
+    const text = await extractPdfText(file);
     return {
       type: 'PDF',
       content: `[PDF: ${file.name}]\n${text}`,
@@ -42,24 +42,21 @@ export async function dispatchFileTask(file) {
   throw new Error('PASS_THROUGH');
 }
 
-function executePdfWorker(file) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker('/pdfExtractor.worker.js');
-    const reader = new FileReader();
-    reader.onload = () => {
-      worker.postMessage({
-        arrayBuffer: reader.result,
-        pdfJsVersion: FILE_CONFIG.PDF_JS_VERSION,
-      });
-    };
-    reader.onerror = () => { worker.terminate(); reject(new Error('PDF文件读取失败')); };
-    reader.readAsArrayBuffer(file);
+async function extractPdfText(file) {
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
-    worker.onmessage = (e) => {
-      worker.terminate();
-      if (e.data.error) reject(new Error(e.data.error));
-      else resolve(e.data.text + (e.data.truncated ? '\n...(仅展示前5页)' : ''));
-    };
-    worker.onerror = (err) => { worker.terminate(); reject(err); };
-  });
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pages = [];
+  const maxPages = Math.min(doc.numPages, 5);
+
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    pages.push(content.items.map((item) => item.str).join(' '));
+  }
+
+  const text = pages.join('\n---\n');
+  return text + (doc.numPages > maxPages ? '\n...(仅展示前5页)' : '');
 }
