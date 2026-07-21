@@ -671,7 +671,7 @@ export default function Home() {
     try {
       const brand = AI_BRANDS[aiConfig.brand] || AI_BRANDS.deepseek;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
+      const timeout = setTimeout(() => controller.abort(), 60000);
       const res = await fetch(brand.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiConfig.key}` },
@@ -740,7 +740,7 @@ export default function Home() {
       const text = msg.content || '';
       setChatMessages(prev => [...prev, { role: 'assistant', content: text || 'API 返回为空。' }]);
     } catch (e: unknown) {
-      const errMsg = (e as Error)?.name === 'AbortError' ? '请求超时（30秒），请重试' : '出错了，请检查AI设置中的Key是否正确。';
+      const errMsg = (e as Error)?.name === 'AbortError' ? '请求超时（60秒），请重试' : '出错了，请检查AI设置中的Key是否正确。';
       setChatMessages(prev => [...prev, { role: 'assistant', content: errMsg }]);
     } finally {
       setChatLoading(false);
