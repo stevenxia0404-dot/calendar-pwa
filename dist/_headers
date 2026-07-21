@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://api.deepseek.com https://api.moonshot.cn https://ark.cn-beijing.volces.com https://dashscope.aliyuncs.com https://open.bigmodel.cn; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.qrserver.com; connect-src 'self' https://schedule-api.boluomate.com https://api.deepseek.com https://api.moonshot.cn https://ark.cn-beijing.volces.com https://dashscope.aliyuncs.com https://open.bigmodel.cn https://api.resend.com; font-src 'self'; media-src 'self';
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdnjs.cloudflare.com https://api.deepseek.com https://api.moonshot.cn https://ark.cn-beijing.volces.com https://dashscope.aliyuncs.com https://open.bigmodel.cn; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.qrserver.com; connect-src 'self' https://schedule-api.boluomate.com https://api.deepseek.com https://api.moonshot.cn https://ark.cn-beijing.volces.com https://dashscope.aliyuncs.com https://open.bigmodel.cn https://api.resend.com; font-src 'self'; media-src 'self';
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin

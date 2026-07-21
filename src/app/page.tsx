@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, Plus, MessageCircle, X, Mic } from 'lucide-react';
 import { read, utils } from 'xlsx';
+import { dispatchFileTask } from '../utils/fileDispatcher';
 
 // ==================== 配置 ====================
 
@@ -459,45 +460,40 @@ export default function Home() {
     } catch { alert('文件读取失败'); }
   };
 
-  // 上传文件/图片 → 直接进聊天
+  // 上传文件/图片 → 调度器分发
   const uploadToChat = async (file: File) => {
     setShowChat(true);
     const ext = file.name.split('.').pop()?.toLowerCase();
     try {
-      if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const base64 = reader.result as string;
-          setChatMessages(prev => [...prev, { role: 'user', content: `[图片: ${file.name}]`, image: base64 }]);
-        };
-        reader.readAsDataURL(file);
-      } else if (ext === 'xlsx' || ext === 'xls') {
-        const buf = await file.arrayBuffer();
-        const wb = read(buf, { type: 'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
-        const text = rows.map(r => r.map(c => String(c ?? '').trim()).join(',')).join('\n');
-        setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
-      } else if (ext === 'pdf') {
-        const pdfjsLib = await import('pdfjs-dist');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-        const buf = await file.arrayBuffer();
-        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-        const pages: string[] = [];
-        for (let i = 1; i <= Math.min(doc.numPages, 5); i++) {
-          const page = await doc.getPage(i);
-          const content = await page.getTextContent();
-          pages.push(content.items.map((item: unknown) => (item as { str: string }).str).join(' '));
-        }
-        const text = pages.join('\n---\n');
-        setChatMessages(prev => [...prev, { role: 'user', content: `[PDF: ${file.name}]\n${text.slice(0, 3000)}${doc.numPages > 5 ? '\n...(仅展示前5页)' : ''}` }]);
+      const result = await dispatchFileTask(file);
+      if (result.type === 'IMAGE_OVERSIZE') {
+        setChatMessages(prev => [...prev, { role: 'user', content: `[图片: ${file.name} 超过5MB限制，请压缩后重试]` }]);
       } else {
-        const text = await file.text();
-        setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
+        setChatMessages(prev => [...prev, { role: 'user', content: result.content || '', image: result.image }]);
       }
     } catch (e) {
-      console.error('文件读取失败:', file.name, e);
-      setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name} 读取失败]` }]);
+      if ((e as Error).message === 'PASS_THROUGH') {
+        // 调度器不处理的类型（Excel / 纯文本）→ 本地处理
+        try {
+          if (ext === 'xlsx' || ext === 'xls') {
+            const buf = await file.arrayBuffer();
+            const wb = read(buf, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
+            const text = rows.map(r => r.map(c => String(c ?? '').trim()).join(',')).join('\n');
+            setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
+          } else {
+            const text = await file.text();
+            setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
+          }
+        } catch (e2) {
+          console.error('文件读取失败:', file.name, e2);
+          setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name} 读取失败]` }]);
+        }
+      } else {
+        console.error('文件读取失败:', file.name, e);
+        setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name} ${(e as Error).message || '读取失败'}]` }]);
+      }
     }
   };
 
