@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, Plus, MessageCircle, X, Mic } from 'lucide-react';
 import { read, utils } from 'xlsx';
 import { dispatchFileTask } from '../utils/fileDispatcher';
+import { adaptPayloadToModel } from '../utils/tokenAdapter';
 
 // ==================== 配置 ====================
 
@@ -682,12 +683,12 @@ export default function Home() {
               if (m.image && m.role === 'user') {
                 return { role: 'user', content: [
                   { type: 'image_url', image_url: { url: m.image } },
-                  { type: 'text', text: m.content },
+                  { type: 'text', text: adaptPayloadToModel(m.content, aiConfig.model) },
                 ]};
               }
-              return { role: m.role, content: m.content };
+              return { role: m.role, content: adaptPayloadToModel(m.content, aiConfig.model) };
             }),
-            { role: 'user', content: userMsg },
+            { role: 'user', content: adaptPayloadToModel(userMsg, aiConfig.model) },
           ],
           tools: CHAT_TOOLS,
         }),
