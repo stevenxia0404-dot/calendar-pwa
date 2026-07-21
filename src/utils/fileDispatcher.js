@@ -50,13 +50,16 @@ async function extractPdfText(file) {
   const doc = await pdfjsLib.getDocument({ data: buf }).promise;
   const pages = [];
   const maxPages = Math.min(doc.numPages, 5);
+  const MAX_CHARS = 6000; // 硬上限，防止超长文本撑爆 payload
 
   for (let i = 1; i <= maxPages; i++) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
     pages.push(content.items.map((item) => item.str).join(' '));
+    if (pages.join('').length > MAX_CHARS * 1.5) break; // 提前终止，避免无效工作
   }
 
-  const text = pages.join('\n---\n');
+  let text = pages.join('\n---\n');
+  if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS) + '\n...(文本过长已截断)';
   return text + (doc.numPages > maxPages ? '\n...(仅展示前5页)' : '');
 }
