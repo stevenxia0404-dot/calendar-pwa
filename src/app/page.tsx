@@ -1362,7 +1362,7 @@ export default function Home() {
             </div>
 
             {/* 消息区 */}
-            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
               {chatMessages.length === 0 && (
                 <p className="text-[#A0A0A0] text-sm text-center py-8">和菠萝聊聊你的日程吧</p>
               )}
