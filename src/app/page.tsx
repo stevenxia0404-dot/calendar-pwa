@@ -681,13 +681,16 @@ export default function Home() {
             { role: 'system', content: getSystemPrompt() },
             ...chatMessages.map(m => {
               if (m.image && m.role === 'user') {
+                // 图片消息：image_url 原样透传，text 标签不做 Token 截断
                 return { role: 'user', content: [
                   { type: 'image_url', image_url: { url: m.image } },
-                  { type: 'text', text: adaptPayloadToModel(m.content, aiConfig.model) },
+                  { type: 'text', text: m.content },
                 ]};
               }
+              // 纯文本消息：经过 Token 防腐层
               return { role: m.role, content: adaptPayloadToModel(m.content, aiConfig.model) };
             }),
+            // 当前用户输入：纯文本，经过 Token 防腐层
             { role: 'user', content: adaptPayloadToModel(userMsg, aiConfig.model) },
           ],
           tools: CHAT_TOOLS,
