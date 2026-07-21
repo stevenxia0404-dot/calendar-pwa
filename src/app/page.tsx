@@ -480,7 +480,7 @@ export default function Home() {
         setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
       } else if (ext === 'pdf') {
         const pdfjsLib = await import('pdfjs-dist');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.1.200/pdf.worker.min.mjs';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
         const buf = await file.arrayBuffer();
         const doc = await pdfjsLib.getDocument({ data: buf }).promise;
         const pages: string[] = [];
@@ -495,7 +495,8 @@ export default function Home() {
         const text = await file.text();
         setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
       }
-    } catch {
+    } catch (e) {
+      console.error('文件读取失败:', file.name, e);
       setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name} 读取失败]` }]);
     }
   };
