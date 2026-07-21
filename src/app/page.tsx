@@ -150,7 +150,7 @@ export default function Home() {
   // 对话框状态
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; image?: string; card?: { date: string; time: string; title: string; type: 'event' | 'task' } }[]>([]);
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; image?: string; cards?: { date: string; time: string; title: string; type: 'event' | 'task' }[] }[]>([]);
   const [aiConfig, setAiConfig] = useState<{ brand: string; model: string; key: string }>({ brand: 'deepseek', model: 'deepseek-v4-flash', key: '' });
   const [showAiSettings, setShowAiSettings] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
@@ -480,7 +480,7 @@ export default function Home() {
         setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
       } else if (ext === 'pdf') {
         const pdfjsLib = await import('pdfjs-dist');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.1.200/pdf.worker.min.mjs';
         const buf = await file.arrayBuffer();
         const doc = await pdfjsLib.getDocument({ data: buf }).promise;
         const pages: string[] = [];
@@ -603,18 +603,42 @@ export default function Home() {
     if (saved) { try { setAiConfig(JSON.parse(saved)); } catch { /* ignore */ } }
   }, []);
 
-  const getSystemPrompt = () => `你是菠萝日程的AI助手。当前日期：${formatLocalDate(new Date())}。根据用户输入，返回JSON格式的日程操作。
-
-操作类型：
-1. { "action": "create", "events": [{ "date": "YYYY-MM-DD", "time": "HH:mm或不填", "title": "事项", "note": "备注", "type": "event或task" }] }
-2. { "action": "query", "message": "查询结果文本" }
-3. { "action": "chat", "message": "闲聊回复文本" }
+  const getSystemPrompt = () => `你是菠萝日程的AI助手。当前日期：${formatLocalDate(new Date())}。根据用户输入，调用对应函数处理日程或回复聊天。
 
 规则：
-- 有明确时间/日期的归类为event，仅提到"今天/明天做XX"无具体时间的归为task（time不填）
-- "后天"就是当前日期+2天，"下周X"按当前日期推算
-- 如果用户只是聊天或问问题，用chat或query
-- 只返回JSON，不返回其他内容`;
+- 有明确时间段的归为event，只说"今天/明天做XX"没有具体时间的归为task（time留空）
+- "后天"=当前日期+2天，"下周X"按当前日期推算
+- 闲聊或回答问题用文字直接回复，不要调用函数`;
+
+  const CHAT_TOOLS = [{
+    type: 'function' as const,
+    function: {
+      name: 'create_events',
+      description: '创建新日程或任务。当用户描述有时间、日期的安排、计划、待办事项时调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          events: {
+            type: 'array',
+            description: '要创建的日程/任务列表',
+            items: {
+              type: 'object',
+              properties: {
+                date: { type: 'string', description: '日期 YYYY-MM-DD' },
+                time: { type: 'string', description: '时间 HH:mm，无具体时间则留空字符串' },
+                title: { type: 'string', description: '事项标题' },
+                note: { type: 'string', description: '备注或补充信息' },
+                type: { type: 'string', enum: ['event', 'task'], description: 'event=有明确时间段的事项, task=待办/无固定时间' },
+              },
+              required: ['date', 'title', 'type'],
+            },
+          },
+          message: { type: 'string', description: '给用户的确认提示语' },
+        },
+        required: ['events'],
+      },
+    },
+  }];
 
   const toggleRecording = () => {
     if (isRecording) {
@@ -668,6 +692,7 @@ export default function Home() {
             }),
             { role: 'user', content: userMsg },
           ],
+          tools: CHAT_TOOLS,
         }),
         signal: controller.signal,
       });
@@ -679,51 +704,59 @@ export default function Home() {
         setChatLoading(false);
         return;
       }
-      const raw = data.choices?.[0]?.message?.content || '';
-      if (!raw) {
-        setChatMessages(prev => [...prev, { role: 'assistant', content: 'API 返回为空，请检查 Key 和模型名称是否正确。原始响应：' + JSON.stringify(data).slice(0, 200) }]);
+      const choice = data.choices?.[0];
+      const msg = choice?.message;
+      if (!msg) {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: 'API 返回为空，请检查 Key 和模型名称是否正确。' }]);
         setChatLoading(false);
         return;
       }
-      // 尝试解析JSON响应
-      let parsed: { action: string; events?: Array<{ date: string; time: string; title: string; note?: string; type: string }>; message?: string };
-      try {
-        const jsonStr = raw.replace(/```json|```/g, '').trim();
-        parsed = JSON.parse(jsonStr);
-      } catch {
-        parsed = { action: 'chat', message: raw };
+
+      // 函数调用 → 展示确认卡片
+      if (msg.tool_calls?.length) {
+        for (const tc of msg.tool_calls) {
+          if (tc.function.name === 'create_events') {
+            let args: { events?: Array<{ date: string; time?: string; title: string; note?: string; type: string }>; message?: string };
+            try { args = JSON.parse(tc.function.arguments); } catch { continue; }
+            if (args.events?.length) {
+              const cards = args.events.map(ev => ({
+                date: ev.date, time: ev.time || '', title: ev.title,
+                type: (ev.type === 'task' ? 'task' : 'event') as 'event' | 'task',
+              }));
+              setChatMessages(prev => [...prev, {
+                role: 'assistant',
+                content: args.message || (msg.content || `已识别 ${cards.length} 条，请确认：`),
+                cards,
+              }]);
+            }
+          }
+        }
+        setChatLoading(false);
+        return;
       }
 
-      if (parsed.action === 'create' && parsed.events) {
-        const cards = parsed.events.map((ev: { date: string; time: string; title: string; note?: string; type: string }) => ({
-          date: ev.date, time: ev.time || '', title: ev.title,
-          type: (ev.type === 'task' ? 'task' : 'event') as 'event' | 'task',
-        }));
-        setChatMessages(prev => [...prev, {
-          role: 'assistant',
-          content: parsed.message || `已识别 ${cards.length} 条，请确认：`,
-          card: cards[0], // 简化：一次只展示第一张确认卡片
-        }]);
-      } else {
-        setChatMessages(prev => [...prev, { role: 'assistant', content: parsed.message || raw }]);
-      }
+      // 纯文本回复
+      const text = msg.content || '';
+      setChatMessages(prev => [...prev, { role: 'assistant', content: text || 'API 返回为空。' }]);
     } catch (e: unknown) {
-      const msg = (e as Error)?.name === 'AbortError' ? '请求超时（30秒），请重试' : '出错了，请检查AI设置中的Key是否正确。';
-      setChatMessages(prev => [...prev, { role: 'assistant', content: msg }]);
+      const errMsg = (e as Error)?.name === 'AbortError' ? '请求超时（30秒），请重试' : '出错了，请检查AI设置中的Key是否正确。';
+      setChatMessages(prev => [...prev, { role: 'assistant', content: errMsg }]);
     } finally {
       setChatLoading(false);
     }
   };
 
-  const confirmAiCard = (card: { date: string; time: string; title: string; type: 'event' | 'task' }) => {
-    const ev: ScheduleEvent = {
-      id: crypto.randomUUID(), title: card.title, date: card.date, time: card.time,
-      raw: card.title, updatedAt: Date.now(), type: card.type, completed: false,
-    };
-    setEvents(prev => [...prev, ev]);
-    if (isOnline && token) pushToCloud(ev, 'POST');
-    setChatMessages(prev => prev.filter(m => !m.card)); // 移除确认卡片
-    setDetailDate(card.date);
+  const confirmAiCards = (cards: { date: string; time: string; title: string; type: 'event' | 'task' }[]) => {
+    for (const card of cards) {
+      const ev: ScheduleEvent = {
+        id: crypto.randomUUID(), title: card.title, date: card.date, time: card.time,
+        raw: card.title, updatedAt: Date.now(), type: card.type, completed: false,
+      };
+      setEvents(prev => [...prev, ev]);
+      if (isOnline && token) pushToCloud(ev, 'POST');
+    }
+    setChatMessages(prev => prev.filter(m => !m.cards?.length));
+    if (cards[0]) setDetailDate(cards[0].date);
   };
 
   // ==================== 日历渲染 ====================
@@ -1350,19 +1383,35 @@ export default function Home() {
                     ) : (
                       <p className="whitespace-pre-wrap">{m.content}</p>
                     )}
-                    {m.card && (
-                      <div className="mt-2 p-3 bg-white rounded-xl border border-[#E8E4DF]">
-                        <div className="text-xs text-[#5C5C5C] space-y-0.5 mb-2">
-                          <div>{m.card.date} {m.card.time || '全天'}</div>
-                          <div className="font-medium text-[#1C1C1C]">{m.card.title}</div>
-                          <div className="text-[#A0A0A0]">{m.card.type === 'task' ? '任务' : '日程'}</div>
-                        </div>
-                        <div className="flex gap-2">
-                          <button onClick={() => setChatMessages(prev => prev.filter((_, j) => j !== i))}
-                            className="flex-1 h-8 text-xs border border-[#E8E4DF] rounded-lg hover:bg-[#F3F1ED]">取消</button>
-                          <button onClick={() => { confirmAiCard(m.card!); setChatMessages(prev => prev.filter((_, j) => j !== i)); }}
-                            className="flex-1 h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E]">确认添加</button>
-                        </div>
+                    {m.cards && m.cards.length > 0 && (
+                      <div className="mt-2 space-y-2">
+                        {m.cards.map((card, ci) => (
+                          <div key={ci} className="p-2.5 bg-white rounded-xl border border-[#E8E4DF]">
+                            <div className="text-xs text-[#5C5C5C] space-y-0.5 mb-2">
+                              <div>{card.date} {card.time || '全天'}</div>
+                              <div className="font-medium text-[#1C1C1C]">{card.title}</div>
+                              <div className="text-[#A0A0A0]">{card.type === 'task' ? '任务' : '日程'}</div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={() => setChatMessages(prev => {
+                                const msg = prev[i];
+                                if (!msg.cards || msg.cards.length <= 1) return prev.filter((_, j) => j !== i);
+                                return prev.map((m, j) => j === i ? { ...m, cards: m.cards!.filter((_, k) => k !== ci) } : m);
+                              })}
+                                className="flex-1 h-8 text-xs border border-[#E8E4DF] rounded-lg hover:bg-[#F3F1ED]">取消</button>
+                              <button onClick={() => { confirmAiCards([card]); setChatMessages(prev => {
+                                const msg = prev[i];
+                                if (!msg.cards || msg.cards.length <= 1) return prev.filter((_, j) => j !== i);
+                                return prev.map((m, j) => j === i ? { ...m, cards: m.cards!.filter((_, k) => k !== ci) } : m);
+                              }); }}
+                                className="flex-1 h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E]">确认添加</button>
+                            </div>
+                          </div>
+                        ))}
+                        {m.cards.length > 1 && (
+                          <button onClick={() => { confirmAiCards(m.cards!); setChatMessages(prev => prev.filter((_, j) => j !== i)); }}
+                            className="w-full h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E] font-medium">全部确认（{m.cards.length}条）</button>
+                        )}
                       </div>
                     )}
                   </div>
