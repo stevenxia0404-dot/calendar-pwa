@@ -34,3 +34,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.superdesign/tmp/
+
+.superdesign/
+.agents/
+.claude/skills/
+neo-brutalist-landing.html
+skills-lock.json
+dist/
