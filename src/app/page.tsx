@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, Plus, MessageCircle, X, Mic } from 'lucide-react';
+import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, MessageCircle, X, Mic } from 'lucide-react';
 import { read, utils } from 'xlsx';
 import { dispatchFileTask } from '../utils/fileDispatcher';
 import { adaptPayloadToModel } from '../utils/tokenAdapter';
@@ -130,6 +130,9 @@ interface ScheduleEvent {
   title: string;
   date: string;
   time: string;
+  endTime: string;
+  location: string;
+  people: string;
   raw: string;
   updatedAt: number;
   type: 'event' | 'task';
@@ -147,20 +150,17 @@ export default function Home() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ title: '', date: '', time: '' });
+  const [editForm, setEditForm] = useState({ title: '', date: '', time: '', endTime: '', location: '', people: '' });
 
   // 对话框状态
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; image?: string; cards?: { date: string; time: string; title: string; type: 'event' | 'task' }[] }[]>([]);
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; image?: string; cards?: { date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }[] }[]>([]);
   const [aiConfig, setAiConfig] = useState<{ brand: string; model: string; key: string }>({ brand: 'deepseek', model: 'deepseek-v4-flash', key: '' });
   const [showAiSettings, setShowAiSettings] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [showPlusMenu, setShowPlusMenu] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const photoInputRef = useRef<HTMLInputElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // 认证状态
   const [user, setUser] = useState<User | null>(null);
@@ -266,7 +266,7 @@ export default function Home() {
         for (const ce of cloudEvents) {
           const local = map.get(ce.id);
           if (!local || ce.updated_at > local.updatedAt) {
-            map.set(ce.id, { id: ce.id, title: ce.title, date: ce.date, time: ce.time || '', raw: ce.raw || '', type: (ce.type || 'event') as 'event' | 'task', completed: !!ce.completed, updatedAt: ce.updated_at });
+            map.set(ce.id, { id: ce.id, title: ce.title, date: ce.date, time: ce.time || '', endTime: ce.end_time || '', location: ce.location || '', people: ce.people || '', raw: ce.raw || '', type: (ce.type || 'event') as 'event' | 'task', completed: !!ce.completed, updatedAt: ce.updated_at });
           }
         }
         return Array.from(map.values());
@@ -282,7 +282,7 @@ export default function Home() {
       if (method === 'DELETE') {
         await api(`/events/${event.id}`, { method: 'DELETE' }, token);
       } else if (method === 'PUT') {
-        await api(`/events/${event.id}`, { method: 'PUT', body: JSON.stringify({ title: event.title, date: event.date, time: event.time, raw: event.raw, updatedAt: event.updatedAt, type: event.type, completed: event.completed }) }, token);
+        await api(`/events/${event.id}`, { method: 'PUT', body: JSON.stringify({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, location: event.location, people: event.people, raw: event.raw, updatedAt: event.updatedAt, type: event.type, completed: event.completed }) }, token);
       } else {
         await api('/events', { method: 'POST', body: JSON.stringify(event) }, token);
       }
@@ -355,7 +355,7 @@ export default function Home() {
 
   const startEdit = (event: ScheduleEvent) => {
     setEditingEventId(event.id);
-    setEditForm({ title: event.title, date: event.date, time: event.time });
+    setEditForm({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, location: event.location, people: event.people });
   };
 
   const saveEdit = async () => {
@@ -366,6 +366,9 @@ export default function Home() {
       title: editForm.title,
       date: editForm.date,
       time: editForm.time,
+      endTime: editForm.endTime,
+      location: editForm.location,
+      people: editForm.people,
       raw: existing?.raw || '',
       updatedAt: Date.now(),
       type: existing?.type || 'event',
@@ -395,8 +398,8 @@ export default function Home() {
 
   const handleExport = () => {
     const sorted = [...events].sort((a, b) => a.date.localeCompare(b.date));
-    const rows = sorted.map(e => [e.date, e.time, e.title, e.raw]);
-    const csv = ['﻿日期,开始时间,事项,备注', ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
+    const rows = sorted.map(e => [e.date, e.time, e.endTime, e.title, e.location, e.people, e.raw]);
+    const csv = ['﻿日期,开始时间,结束时间,事项,地点,人员,备注', ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `日程表_${formatLocalDate(new Date())}.csv`; a.click();
@@ -404,10 +407,10 @@ export default function Home() {
 
   const generateCsvTemplate = () => {
     const sample = [
-      '日期,开始时间,事项,备注',
-      '2026-07-20,08:50,初始训练-模拟航班,青浦B777经济静态舱',
-      '2026-07-21,12:50,团队周会,C楼201',
-      '2026-07-22,,整理文档',
+      '日期,开始时间,结束时间,事项,地点,人员,备注',
+      '2026-07-20,08:50,10:30,初始训练-模拟航班,青浦B777经济静态舱,张教员',
+      '2026-07-21,12:50,13:50,团队周会,C楼201,全组',
+      '2026-07-22,,,整理文档,,,培训材料归档',
     ].join('\n');
     const blob = new Blob(['﻿' + sample], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -425,7 +428,7 @@ export default function Home() {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
 
-        // 智能检测表头映射到模板格式：日期,开始时间,事项,备注
+        // 智能检测表头映射到模板格式：日期,开始时间,结束时间,事项,地点,人员,备注
         let header: string[] | null = null;
         let dataRows = rows;
         if (rows[0] && rows[0].some(c => String(c).includes('日期') || String(c).includes('时间') || String(c).includes('事项') || String(c).includes('内容'))) {
@@ -439,19 +442,25 @@ export default function Home() {
         };
         const idxD = findCol(['日期']);
         const idxT = findCol(['开始时间', '时间']);
+        const idxE = findCol(['结束时间']);
         const idxC = findCol(['内容', '事项', '日程', '标题']);
-        const idxN = findCol(['地点', '备注', '描述']);
+        const idxL = findCol(['地点', '位置']);
+        const idxP = findCol(['人员', '参与人']);
+        const idxN = findCol(['备注', '描述', '说明']);
 
-        const csvLines = ['日期,开始时间,事项,备注'];
+        const csvLines = ['日期,开始时间,结束时间,事项,地点,人员,备注'];
         for (const r of dataRows) {
           const s = r.map(c => String(c ?? '').trim());
           if (s.every(c => !c)) continue;
           const date = idxD >= 0 ? s[idxD] : s[0] || '';
           const time = idxT >= 0 ? s[idxT] : s[1] || '';
-          const content = idxC >= 0 ? s[idxC] : s[2] || '';
-          const note = idxN >= 0 ? s[idxN] : s[3] || '';
+          const endTime = idxE >= 0 ? s[idxE] : s[2] || '';
+          const content = idxC >= 0 ? s[idxC] : s[3] || '';
+          const location = idxL >= 0 ? s[idxL] : s[4] || '';
+          const people = idxP >= 0 ? s[idxP] : s[5] || '';
+          const note = idxN >= 0 ? s[idxN] : s[6] || '';
           if (!date && !content) continue;
-          csvLines.push([date, time, content, note].map(c => c.includes(',') ? `"${c}"` : c).join(','));
+          csvLines.push([date, time, endTime, content, location, people, note].map(c => c.includes(',') ? `"${c}"` : c).join(','));
         }
         setImportText(csvLines.join('\n'));
       } else {
@@ -506,7 +515,7 @@ export default function Home() {
 
     for (let i = startIdx; i < lines.length; i++) {
       const cells = parseCsvLine(lines[i]);
-      const colDate = cells[0] || '', colTime = cells[1] || '', colTitle = cells[2] || '', colNote = cells[3] || '';
+      const colDate = cells[0] || '', colTime = cells[1] || '', colEndTime = cells[2] || '', colTitle = cells[3] || '', colLocation = cells[4] || '', colPeople = cells[5] || '', colNote = cells[6] || '';
       const title = colTitle || '未命名';
 
       const smartDate = parseSmartDate(colNote || colTitle);
@@ -524,7 +533,7 @@ export default function Home() {
 
       preview.push({
         id: crypto.randomUUID(), title, date, time,
-        raw: colNote || colTitle, updatedAt: Date.now(),
+        endTime: colEndTime, location: colLocation, people: colPeople, raw: colNote || colTitle, updatedAt: Date.now(),
         type: isTask ? 'task' : 'event', completed: false,
       });
     }
@@ -623,8 +632,11 @@ export default function Home() {
               type: 'object',
               properties: {
                 date: { type: 'string', description: '日期 YYYY-MM-DD' },
-                time: { type: 'string', description: '时间 HH:mm，无具体时间则留空字符串' },
+                time: { type: 'string', description: '开始时间 HH:mm，无具体时间则留空字符串' },
+                endTime: { type: 'string', description: '结束时间 HH:mm' },
                 title: { type: 'string', description: '事项标题' },
+                location: { type: 'string', description: '地点，如教室/会议室' },
+                people: { type: 'string', description: '相关人员' },
                 note: { type: 'string', description: '备注或补充信息' },
                 type: { type: 'string', enum: ['event', 'task'], description: 'event=有明确时间段的事项, task=待办/无固定时间' },
               },
@@ -717,11 +729,12 @@ export default function Home() {
       if (msg.tool_calls?.length) {
         for (const tc of msg.tool_calls) {
           if (tc.function.name === 'create_events') {
-            let args: { events?: Array<{ date: string; time?: string; title: string; note?: string; type: string }>; message?: string };
+            let args: { events?: Array<{ date: string; time?: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: string }>; message?: string };
             try { args = JSON.parse(tc.function.arguments); } catch { continue; }
             if (args.events?.length) {
               const cards = args.events.map(ev => ({
-                date: ev.date, time: ev.time || '', title: ev.title,
+                date: ev.date, time: ev.time || '', endTime: ev.endTime || '', title: ev.title,
+                location: ev.location || '', people: ev.people || '', note: ev.note || '',
                 type: (ev.type === 'task' ? 'task' : 'event') as 'event' | 'task',
               }));
               setChatMessages(prev => [...prev, {
@@ -747,15 +760,15 @@ export default function Home() {
     }
   };
 
-  const confirmAiCards = (cards: { date: string; time: string; title: string; type: 'event' | 'task' }[]) => {
-    for (const card of cards) {
-      const ev: ScheduleEvent = {
-        id: crypto.randomUUID(), title: card.title, date: card.date, time: card.time,
-        raw: card.title, updatedAt: Date.now(), type: card.type, completed: false,
-      };
-      setEvents(prev => [...prev, ev]);
-      if (isOnline && token) pushToCloud(ev, 'POST');
-    }
+  const confirmAiCards = (cards: { date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }[]) => {
+    const newEvents = cards.map(card => ({
+      id: crypto.randomUUID(), title: card.title, date: card.date, time: card.time,
+      endTime: card.endTime || '', location: card.location || '', people: card.people || '', raw: card.note || card.title, updatedAt: Date.now(), type: card.type, completed: false,
+    }));
+
+    setEvents(prev => [...prev, ...newEvents]);
+    if (isOnline && token) newEvents.forEach(ev => pushToCloud(ev, 'POST'));
+
     setChatMessages(prev => prev.filter(m => !m.cards?.length));
     if (cards[0]) setDetailDate(cards[0].date);
   };
@@ -882,6 +895,14 @@ export default function Home() {
             <button onClick={handleExport}
               className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导出" title="导出CSV">
               <Download className="w-4 h-4 text-[#A0A0A0]" />
+            </button>
+            <button onClick={() => { setImportText(''); setImportPreview(null); setShowImportModal(true); }}
+              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导入" title="导入CSV/Excel">
+              <Upload className="w-4 h-4 text-[#A0A0A0]" />
+            </button>
+            <button onClick={generateCsvTemplate}
+              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="模板下载" title="CSV模板下载">
+              <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1" strokeWidth={2}/><path d="M3 5h18M8 5v16M3 10h18" strokeWidth={2}/></svg>
             </button>
             <button onClick={() => setShowAiSettings(true)}
               className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="AI设置" title="AI 连接设置">
@@ -1111,7 +1132,7 @@ export default function Home() {
                   <button onClick={() => setShowImportModal(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center">&times;</button>
                 </div>
                 <div className="p-5 space-y-4 flex-1 flex flex-col min-h-0">
-                  <p className="text-xs text-[#A0A0A0]">每行一条，格式：日期,开始时间,事项,备注（无时间的自动归为任务）</p>
+                  <p className="text-xs text-[#A0A0A0]">每行一条，格式：日期,开始时间,结束时间,事项,地点,人员,备注（无时间的自动归为任务）</p>
                   <textarea value={importText} onChange={e => setImportText(e.target.value)}
                     placeholder={`2026-07-20,08:50,初始训练-模拟航班,青浦B777经济静态舱\n2026-07-21,12:50,团队周会,C楼201\n2026-07-22,,整理文档`}
                     className="flex-1 w-full p-3 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C] resize-none font-mono" />
@@ -1120,10 +1141,6 @@ export default function Home() {
                       <Upload className="w-4 h-4" /> 上传 CSV / XLSX
                       <input type="file" accept=".csv,.xlsx" onChange={e => { if (e.target.files?.[0]) parseImportFile(e.target.files[0]); e.target.value = ''; }} className="hidden" />
                     </label>
-                    <button onClick={generateCsvTemplate}
-                      className="h-11 px-4 rounded-lg border border-[#E8E4DF] text-sm text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center gap-1.5">
-                      <Download className="w-4 h-4" /> 下载模板
-                    </button>
                   </div>
                   <button onClick={parseImportText} disabled={!importText.trim()}
                     className="w-full h-11 bg-[#ED6A3B] text-white rounded-lg text-sm font-semibold hover:bg-[#D45D2E] disabled:opacity-40 transition-colors">解析预览</button>
@@ -1187,30 +1204,48 @@ export default function Home() {
                             <input type="text" value={editForm.title} onChange={ev => setEditForm({ ...editForm, title: ev.target.value })}
                               className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
                           </div>
+                          <div>
+                            <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
+                            <input type="date" title="日期" value={editForm.date} onChange={ev => setEditForm({ ...editForm, date: ev.target.value })}
+                              className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                          </div>
                           <div className="flex gap-3">
                             <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
-                              <input type="date" title="日期" value={editForm.date} onChange={ev => setEditForm({ ...editForm, date: ev.target.value })}
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">开始时间</label>
+                              <input type="time" title="开始时间" value={editForm.time} onChange={ev => setEditForm({ ...editForm, time: ev.target.value })}
                                 className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
                             </div>
                             <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">时间</label>
-                              <input type="time" title="时间" value={editForm.time} onChange={ev => setEditForm({ ...editForm, time: ev.target.value })}
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">结束时间</label>
+                              <input type="time" title="结束时间" value={editForm.endTime} onChange={ev => setEditForm({ ...editForm, endTime: ev.target.value })}
                                 className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
                             </div>
                           </div>
+                          <div className="flex gap-3">
+                            <div className="flex-1">
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">地点</label>
+                              <input type="text" value={editForm.location} onChange={ev => setEditForm({ ...editForm, location: ev.target.value })}
+                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="教室/会议室" />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">人员</label>
+                              <input type="text" value={editForm.people} onChange={ev => setEditForm({ ...editForm, people: ev.target.value })}
+                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="老师/同学" />
+                            </div>
+                          </div>
                           <div className="flex gap-2 justify-end">
-                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '' }); }}
+                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', location: '', people: '' }); }}
                               className="px-4 py-1.5 text-sm text-[#5C5C5C] bg-[#E8E4DF] rounded-lg hover:bg-[#D9D4CF] transition-colors">取消</button>
                             <button onClick={saveEdit} className="px-4 py-1.5 text-sm text-white bg-[#ED6A3B] rounded-lg hover:bg-[#D45D2E] transition-colors">保存</button>
                           </div>
                         </div>
                       ) : (
                         <div className="flex items-center gap-3">
-                          <span className="bg-[#ED6A3B] text-white text-sm px-3 py-1.5 rounded-lg font-mono font-semibold min-w-[60px] text-center">{e.time}</span>
+                          <span className="bg-[#ED6A3B] text-white text-sm px-3 py-1.5 rounded-lg font-mono font-semibold min-w-[60px] text-center">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>
                           <div className="flex-1 min-w-0">
                             <div className="font-medium text-[#1C1C1C] truncate">{e.title}</div>
                             <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">{e.raw}</div>
+                            {(e.location || e.people) && <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">{e.location}{e.location && e.people ? ' · ' : ''}{e.people}</div>}
                           </div>
                           <div className="flex gap-1">
                             <button onClick={() => startEdit(e)} className="p-2 text-[#A0A0A0] hover:text-[#ED6A3B] hover:bg-[#FFF5F0] rounded-lg transition-colors" aria-label="编辑">
@@ -1251,8 +1286,20 @@ export default function Home() {
                                 className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
                             </div>
                           </div>
+                          <div className="flex gap-3">
+                            <div className="flex-1">
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">地点</label>
+                              <input type="text" value={editForm.location} onChange={ev => setEditForm({ ...editForm, location: ev.target.value })}
+                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="教室/会议室" />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-xs text-[#A0A0A0] mb-1 block">人员</label>
+                              <input type="text" value={editForm.people} onChange={ev => setEditForm({ ...editForm, people: ev.target.value })}
+                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="老师/同学" />
+                            </div>
+                          </div>
                           <div className="flex gap-2 justify-end">
-                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '' }); }}
+                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', location: '', people: '' }); }}
                               className="px-4 py-1.5 text-sm text-[#5C5C5C] bg-[#E8E4DF] rounded-lg hover:bg-[#D9D4CF] transition-colors">取消</button>
                             <button onClick={saveEdit} className="px-4 py-1.5 text-sm text-white bg-[#ED6A3B] rounded-lg hover:bg-[#D45D2E] transition-colors">保存</button>
                           </div>
@@ -1274,6 +1321,7 @@ export default function Home() {
                           <div className="flex-1 min-w-0">
                             <div className={`font-medium truncate ${e.completed ? 'line-through text-[#A0A0A0]' : 'text-[#1C1C1C]'}`}>{e.title}</div>
                             {e.raw && <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>{e.raw}</div>}
+                            {(e.location || e.people) && <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>{e.location}{e.location && e.people ? ' · ' : ''}{e.people}</div>}
                           </div>
                           <div className="flex gap-1">
                             <button onClick={() => startEdit(e)} className="p-2 text-[#A0A0A0] hover:text-[#ED6A3B] hover:bg-[#FFF5F0] rounded-lg transition-colors" aria-label="编辑">
@@ -1389,28 +1437,26 @@ export default function Home() {
                         {m.cards.map((card, ci) => (
                           <div key={ci} className="p-2.5 bg-white rounded-xl border border-[#E8E4DF]">
                             <div className="text-xs text-[#5C5C5C] space-y-0.5 mb-2">
-                              <div>{card.date} {card.time || '全天'}</div>
+                              <div>{card.date} {card.time || '全天'}{card.endTime ? `-${card.endTime}` : ''}</div>
                               <div className="font-medium text-[#1C1C1C]">{card.title}</div>
+                              {(card.location || card.people) && <div className="text-[#A0A0A0]">{card.location}{card.location && card.people ? ' · ' : ''}{card.people}</div>}
+                              {card.note && <div className="text-[#A0A0A0] text-[11px]">{card.note}</div>}
                               <div className="text-[#A0A0A0]">{card.type === 'task' ? '任务' : '日程'}</div>
                             </div>
                             <div className="flex gap-2">
                               <button onClick={() => setChatMessages(prev => {
                                 const msg = prev[i];
-                                if (!msg.cards || msg.cards.length <= 1) return prev.filter((_, j) => j !== i);
+                                if (!msg?.cards || msg.cards.length <= 1) return prev.filter((_, j) => j !== i);
                                 return prev.map((m, j) => j === i ? { ...m, cards: m.cards!.filter((_, k) => k !== ci) } : m);
                               })}
                                 className="flex-1 h-8 text-xs border border-[#E8E4DF] rounded-lg hover:bg-[#F3F1ED]">取消</button>
-                              <button onClick={() => { confirmAiCards([card]); setChatMessages(prev => {
-                                const msg = prev[i];
-                                if (!msg.cards || msg.cards.length <= 1) return prev.filter((_, j) => j !== i);
-                                return prev.map((m, j) => j === i ? { ...m, cards: m.cards!.filter((_, k) => k !== ci) } : m);
-                              }); }}
+                              <button onClick={() => confirmAiCards([card])}
                                 className="flex-1 h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E]">确认添加</button>
                             </div>
                           </div>
                         ))}
                         {m.cards.length > 1 && (
-                          <button onClick={() => { confirmAiCards(m.cards!); setChatMessages(prev => prev.filter((_, j) => j !== i)); }}
+                          <button onClick={() => confirmAiCards(m.cards!)}
                             className="w-full h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E] font-medium">全部确认（{m.cards.length}条）</button>
                         )}
                       </div>
@@ -1434,35 +1480,6 @@ export default function Home() {
             {/* 输入区 */}
             <div className="px-4 py-3 border-t border-[#E8E4DF] shrink-0">
               <div className="flex items-center gap-2 bg-[#F3F1ED] p-1.5 rounded-2xl">
-                {/* ＋上传 */}
-                <div className="relative">
-                  <button onClick={() => setShowPlusMenu(!showPlusMenu)}
-                    className="w-10 h-10 rounded-xl hover:bg-[#E8E4DF] text-[#5C5C5C] flex items-center justify-center shrink-0 transition-colors">
-                    <Plus className="w-5 h-5" />
-                  </button>
-                  {showPlusMenu && (
-                    <>
-                      <div className="fixed inset-0 z-[59]" onClick={() => setShowPlusMenu(false)} />
-                      <div className="absolute bottom-12 left-0 bg-white rounded-2xl shadow-xl border border-[#E8E4DF] py-2 min-w-[140px] z-[60] animate-slide-up">
-                      <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
-                        <svg className="w-5 h-5 text-[#ED6A3B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2}/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" strokeWidth={2}/></svg>
-                        照片
-                        <input ref={photoInputRef} type="file" accept="image/*" capture="environment" onChange={e => { if (e.target.files?.[0]) { uploadToChat(e.target.files[0]); setShowPlusMenu(false); } e.target.value = ''; }} className="hidden" />
-                      </label>
-                      <label className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] cursor-pointer text-sm text-[#1C1C1C]">
-                        <svg className="w-5 h-5 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                        文件
-                        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf,.txt,.docx,.ics,.json" onChange={e => { if (e.target.files?.[0]) { uploadToChat(e.target.files[0]); setShowPlusMenu(false); } e.target.value = ''; }} className="hidden" />
-                      </label>
-                      <button onClick={() => { generateCsvTemplate(); setShowPlusMenu(false); }}
-                        className="flex items-center gap-3 px-4 py-3 hover:bg-[#F7F5F2] w-full text-left text-sm text-[#1C1C1C]">
-                        <svg className="w-5 h-5 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1" strokeWidth={2}/><path d="M3 5h18M8 5v16M3 10h18" strokeWidth={2}/></svg>
-                        模板
-                      </button>
-                    </div>
-                    </>
-                  )}
-                </div>
                 {/* 语音 */}
                 <button onClick={toggleRecording}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all ${

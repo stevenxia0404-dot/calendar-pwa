@@ -1,0 +1,2 @@
+ALTER TABLE events ADD COLUMN location TEXT DEFAULT '';
+ALTER TABLE events ADD COLUMN people TEXT DEFAULT '';

@@ -394,7 +394,7 @@ export default {
         if (!row) return json({ error: 'Invalid token' }, 401, headers);
 
         const { results: evts } = await env.DB.prepare(
-          'SELECT id, title, date, time, raw, type, completed, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
+          'SELECT id, title, date, time, end_time, location, people, raw, type, completed, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
         ).bind(row.user_id).all();
 
         const toUTC = (d, t) => {
@@ -433,18 +433,21 @@ export default {
               `DTEND;VALUE=DATE:${allDayEnd(e.date)}`,
               `SUMMARY:${prefix}${e.title.replace(/[,;\\]/g, '\\$&')}`,
               `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
+              ...(e.location ? [`LOCATION:${e.location.replace(/[,;\\]/g, '\\$&')}`] : []),
               `UID:${e.id}`,
               `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
               'END:VEVENT'
             );
           } else {
             const dt = toUTC(e.date, e.time);
+            const endDt = e.end_time ? toUTC(e.date, e.end_time) : addHour(dt);
             lines.push(
               'BEGIN:VEVENT',
               `DTSTART:${dt}`,
-              `DTEND:${addHour(dt)}`,
+              `DTEND:${endDt}`,
               `SUMMARY:${e.title.replace(/[,;\\]/g, '\\$&')}`,
               `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
+              ...(e.location ? [`LOCATION:${e.location.replace(/[,;\\]/g, '\\$&')}`] : []),
               `UID:${e.id}`,
               `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
               'END:VEVENT'
@@ -473,7 +476,7 @@ export default {
       // 获取日程（支持增量同步）
       if (path === '/events' && method === 'GET') {
         const since = url.searchParams.get('since');
-        let query = 'SELECT id, title, date, time, raw, type, completed, updated_at FROM events WHERE user_id = ?';
+        let query = 'SELECT id, title, date, time, end_time, location, people, raw, type, completed, updated_at FROM events WHERE user_id = ?';
         const params = [userId];
 
         if (since) {
@@ -489,7 +492,7 @@ export default {
 
       // 创建日程
       if (path === '/events' && method === 'POST') {
-        const { id, title, date, time, raw, updatedAt, type, completed } = await request.json();
+        const { id, title, date, time, endTime, location, people, raw, updatedAt, type, completed } = await request.json();
         if (!title || !date) {
           return json({ error: '缺少必填字段' }, 400, headers);
         }
@@ -499,8 +502,8 @@ export default {
         const ts = updatedAt || Date.now();
 
         await env.DB.prepare(
-          'INSERT OR REPLACE INTO events (id, user_id, title, date, time, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).bind(eventId, userId, title, date, time || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
+          'INSERT OR REPLACE INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(eventId, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
       }
@@ -515,7 +518,7 @@ export default {
         const merged = [];
 
         for (const ev of events) {
-          const { id, title, date, time, raw, updatedAt, type, completed } = ev;
+          const { id, title, date, time, endTime, location, people, raw, updatedAt, type, completed } = ev;
           if (!id || !title || !date) continue;
 
           // 检查服务端版本是否更新
@@ -525,8 +528,8 @@ export default {
 
           if (!existing || (updatedAt && updatedAt > existing.updated_at)) {
             await env.DB.prepare(
-              'INSERT OR REPLACE INTO events (id, user_id, title, date, time, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            ).bind(id, userId, title, date, time || '', raw || '', type || 'event', completed ? 1 : 0, updatedAt || Date.now()).run();
+              'INSERT OR REPLACE INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).bind(id, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, updatedAt || Date.now()).run();
             merged.push(id);
           }
         }
@@ -556,7 +559,7 @@ export default {
       // 更新日程
       if (path.startsWith('/events/') && method === 'PUT') {
         const eventId = path.split('/')[2];
-        const { title, date, time, raw, updatedAt, type, completed } = await request.json();
+        const { title, date, time, endTime, location, people, raw, updatedAt, type, completed } = await request.json();
 
         const existing = await env.DB.prepare(
           'SELECT * FROM events WHERE id = ? AND user_id = ?'
@@ -566,8 +569,8 @@ export default {
 
         const ts = updatedAt || Date.now();
         await env.DB.prepare(
-          'UPDATE events SET title = ?, date = ?, time = ?, raw = ?, type = ?, completed = ?, updated_at = ? WHERE id = ? AND user_id = ?'
-        ).bind(title, date, time || '', raw || '', type || 'event', completed ? 1 : 0, ts, eventId, userId).run();
+          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts, eventId, userId).run();
 
         return json({ ok: true, updated_at: ts }, 200, headers);
       }
