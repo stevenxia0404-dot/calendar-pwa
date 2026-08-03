@@ -699,42 +699,22 @@ export default function Home() {
           let ev;
           try { ev = JSON.parse(jsonStr); } catch { continue; }
 
-          if (ev.event === 'conversation.message.delta' && ev.data?.content) {
-            fullText += ev.data.content;
+          if (ev.type === 'answer' && ev.content) {
+            fullText += ev.content;
             setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
-          } else if (ev.event === 'conversation.message.completed' && ev.data) {
-            const msg = ev.data;
-            if (msg.content) {
-              fullText = msg.content;
-              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
+          } else if (ev.type === 'function_call' && ev.function) {
+            const fn = ev.function;
+            let args;
+            try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments) : fn.arguments; } catch { continue; }
+            const allCards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
+            if (fn.name === 'create_events' && args.events?.length) {
+              for (const e of args.events) allCards.push({ date: e.date, time: e.time || '', endTime: e.endTime || '', title: e.title, location: e.location || '', people: e.people || '', note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
             }
-            // 处理 tool_calls
-            const toolCalls = msg.tool_calls || [];
-            if (toolCalls.length > 0) {
-              const allCards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
-              for (const tc of toolCalls) {
-                const fn = tc.function || tc;
-                const name = fn.name;
-                let args;
-                try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments) : fn.arguments; } catch { continue; }
-                if (name === 'create_events' && args.events?.length) {
-                  for (const ev of args.events) allCards.push({ date: ev.date, time: ev.time || '', endTime: ev.endTime || '', title: ev.title, location: ev.location || '', people: ev.people || '', note: ev.note || '', type: (ev.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
-                } else if (name === 'update_event' && args.event) {
-                  allCards.push({ date: args.event.date || '', time: args.event.time || '', endTime: args.event.endTime || '', title: args.event.title || '', location: args.event.location || '', people: args.event.people || '', note: args.event.note || '', type: 'event', ...args.event });
-                } else if (name === 'delete_event' && args.event) {
-                  // TODO: 删除操作 UI
-                } else if (name === 'query_events' && args.query) {
-                  // TODO: 查询操作 UI
-                }
-              }
-              if (allCards.length > 0) {
-                setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText || `已识别 ${allCards.length} 条，请确认：`, cards: allCards } : m));
-              }
+            if (allCards.length > 0) {
+              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText || `已识别 ${allCards.length} 条，请确认：`, cards: allCards } : m));
             }
-          } else if (ev.event === 'conversation.chat.completed') {
-            // 对话完成，流结束
-          } else if (ev.event === 'error') {
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: `出错了：${ev.data?.message || '未知错误'}` } : m));
+          } else if (ev.type === 'done') {
+            // 流结束
           }
         }
       }
