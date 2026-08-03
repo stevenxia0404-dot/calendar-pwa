@@ -705,7 +705,7 @@ export default function Home() {
           try { ev = JSON.parse(jsonStr); } catch { continue; }
 
           if (ev.type === 'answer') {
-            const chunk = ev.content || ev.reasoning_content || '';
+            const chunk = ev.content || '';
             if (chunk) {
               fullText += chunk;
               setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
