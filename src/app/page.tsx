@@ -663,6 +663,7 @@ export default function Home() {
           user_id: user?.id ? String(user.id) : 'guest',
           stream: true,
           auto_save_history: false,
+          tools: CHAT_TOOLS,
           additional_messages: [
             { role: 'user', content: userMsg, content_type: 'text' },
           ],
