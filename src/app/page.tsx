@@ -9,9 +9,8 @@ import { read, utils } from 'xlsx';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://schedule-api.boluomate.com';
 
 const COZE_CONFIG = {
-  botId: '',
-  token: '',
-  apiUrl: 'https://api.coze.cn/v3/chat',
+  botId: '7669756491917721651',
+  apiUrl: 'https://schedule-api.boluomate.com/ai/chat',
 };
 
 // ==================== 工具函数 ====================
@@ -658,7 +657,7 @@ export default function Home() {
       const timeout = setTimeout(() => controller.abort(), 60000);
       const res = await fetch(COZE_CONFIG.apiUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${COZE_CONFIG.token}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           bot_id: COZE_CONFIG.botId,
           user_id: user?.id ? String(user.id) : 'guest',

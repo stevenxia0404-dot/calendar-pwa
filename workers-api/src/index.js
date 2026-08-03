@@ -363,6 +363,32 @@ export default {
         return json({ ok: true }, 200, headers);
       }
 
+      // Coze AI 代理（需登录）
+      if (path === '/ai/chat' && method === 'POST') {
+        const payload = await requireAuth(request, env);
+        if (!payload) return json({ error: '请先激活同步' }, 401, headers);
+
+        const body = await request.text();
+        const res = await fetch('https://api.coze.cn/v3/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${env.COZE_API_TOKEN}`,
+          },
+          body,
+        });
+
+        return new Response(res.body, {
+          status: res.status,
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            ...headers,
+          },
+        });
+      }
+
       // iCalendar 订阅（无需登录，使用 cal_token 或 test 模式）
       if (path === '/events/ical' && method === 'GET') {
         const calToken = url.searchParams.get('token');
