@@ -1,6 +1,9 @@
 // 菠萝日程 - Cloudflare Workers API v0.4.1
 // 邮箱验证码认证 + JWT + D1 数据库
 
+// 白名单邮箱 — Coze Bot 模式（开发者付费），其余走直调（用户自付）
+const FAMILY_EMAILS = [];
+
 // ==================== JWT 工具 ====================
 
 function base64urlEncode(str) {
@@ -322,7 +325,8 @@ export default {
           env.JWT_SECRET
         );
 
-        return json({ token, user: { id: user.id, email: user.email } }, 200, headers);
+        const role = FAMILY_EMAILS.includes(email) ? 'family' : 'user';
+        return json({ token, user: { id: user.id, email: user.email, role } }, 200, headers);
       }
 
       // 获取当前用户
@@ -335,7 +339,8 @@ export default {
         ).bind(payload.userId).first();
 
         if (!user) return json({ error: '用户不存在' }, 404, headers);
-        return json({ user }, 200, headers);
+        const role = FAMILY_EMAILS.includes(user.email) ? 'family' : 'user';
+        return json({ user: { id: user.id, email: user.email, role } }, 200, headers);
       }
 
       // 删除账号

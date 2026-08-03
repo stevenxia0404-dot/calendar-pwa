@@ -3,12 +3,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, MessageCircle, X, Mic } from 'lucide-react';
 import { read, utils } from 'xlsx';
-import { dispatchFileTask } from '../utils/fileDispatcher';
-import { adaptPayloadToModel } from '../utils/tokenAdapter';
 
 // ==================== 配置 ====================
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://schedule-api.boluomate.com';
+
+const COZE_CONFIG = {
+  botId: '',
+  token: '',
+  apiUrl: 'https://api.coze.cn/v3/chat',
+};
 
 // ==================== 工具函数 ====================
 
@@ -139,7 +143,7 @@ interface ScheduleEvent {
   completed: boolean;
 }
 
-interface User { id: number; email: string; }
+interface User { id: number; email: string; role?: 'family' | 'user'; }
 
 // ==================== 主组件 ====================
 
@@ -155,8 +159,8 @@ export default function Home() {
   // 对话框状态
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; image?: string; cards?: { date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }[] }[]>([]);
-  const [aiConfig, setAiConfig] = useState<{ brand: string; model: string; key: string }>({ brand: 'deepseek', model: 'deepseek-v4-flash', key: '' });
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; cards?: { date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }[] }[]>([]);
+  const [aiConfig, setAiConfig] = useState<{ brand: string; model: string; key: string; mode: 'coze' | 'direct' }>({ brand: 'deepseek', model: 'deepseek-v4-flash', key: '', mode: 'direct' });
   const [showAiSettings, setShowAiSettings] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -470,43 +474,6 @@ export default function Home() {
     } catch { alert('文件读取失败'); }
   };
 
-  // 上传文件/图片 → 调度器分发
-  const uploadToChat = async (file: File) => {
-    setShowChat(true);
-    const ext = file.name.split('.').pop()?.toLowerCase();
-    try {
-      const result = await dispatchFileTask(file);
-      if (result.type === 'IMAGE_OVERSIZE') {
-        setChatMessages(prev => [...prev, { role: 'user', content: `[图片: ${file.name} 超过5MB限制，请压缩后重试]` }]);
-      } else {
-        setChatMessages(prev => [...prev, { role: 'user', content: result.content || '', image: result.image }]);
-      }
-    } catch (e) {
-      if ((e as Error).message === 'PASS_THROUGH') {
-        // 调度器不处理的类型（Excel / 纯文本）→ 本地处理
-        try {
-          if (ext === 'xlsx' || ext === 'xls') {
-            const buf = await file.arrayBuffer();
-            const wb = read(buf, { type: 'array' });
-            const ws = wb.Sheets[wb.SheetNames[0]];
-            const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
-            const text = rows.map(r => r.map(c => String(c ?? '').trim()).join(',')).join('\n');
-            setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
-          } else {
-            const text = await file.text();
-            setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name}]\n${text.slice(0, 3000)}` }]);
-          }
-        } catch (e2) {
-          console.error('文件读取失败:', file.name, e2);
-          setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name} 读取失败]` }]);
-        }
-      } else {
-        console.error('文件读取失败:', file.name, e);
-        setChatMessages(prev => [...prev, { role: 'user', content: `[文件: ${file.name} ${(e as Error).message || '读取失败'}]` }]);
-      }
-    }
-  };
-
   const parseImportText = () => {
     const lines = importText.replace(/^﻿/, '').split('\n').map(l => l.trim()).filter(Boolean);
     // 跳过表头
@@ -607,8 +574,15 @@ export default function Home() {
 
   useEffect(() => {
     const saved = localStorage.getItem('schedule_ai_config');
-    if (saved) { try { setAiConfig(JSON.parse(saved)); } catch { /* ignore */ } }
+    if (saved) { try { const c = JSON.parse(saved); setAiConfig({ ...c, mode: c.mode || 'direct' }); } catch { /* ignore */ } }
   }, []);
+
+  // 白名单用户自动切换 Coze 模式
+  useEffect(() => {
+    if (user?.role === 'family') {
+      setAiConfig(prev => ({ ...prev, mode: 'coze' }));
+    }
+  }, [user]);
 
   const getSystemPrompt = () => `你是菠萝日程的AI助手。当前日期：${formatLocalDate(new Date())}。根据用户输入，调用对应函数处理日程或回复聊天。
 
@@ -673,12 +647,117 @@ export default function Home() {
     setIsRecording(true);
   };
 
+  const sendCozeChat = async (userMsg: string) => {
+    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setChatLoading(true);
+
+    setChatMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      const res = await fetch(COZE_CONFIG.apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${COZE_CONFIG.token}` },
+        body: JSON.stringify({
+          bot_id: COZE_CONFIG.botId,
+          user_id: user?.id ? String(user.id) : 'guest',
+          stream: true,
+          auto_save_history: true,
+          additional_messages: [
+            { role: 'user', content: userMsg, content_type: 'text' },
+          ],
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        const errText = await res.text();
+        setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: `Coze API 错误（${res.status}）：${errText.slice(0, 100)}` } : m));
+        setChatLoading(false);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) { setChatLoading(false); return; }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const jsonStr = line.slice(5).trim();
+          if (!jsonStr || jsonStr === '[DONE]') continue;
+          let ev;
+          try { ev = JSON.parse(jsonStr); } catch { continue; }
+
+          if (ev.event === 'conversation.message.delta' && ev.data?.content) {
+            fullText += ev.data.content;
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
+          } else if (ev.event === 'conversation.message.completed' && ev.data) {
+            const msg = ev.data;
+            if (msg.content) {
+              fullText = msg.content;
+              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
+            }
+            // 处理 tool_calls
+            const toolCalls = msg.tool_calls || [];
+            if (toolCalls.length > 0) {
+              const allCards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
+              for (const tc of toolCalls) {
+                const fn = tc.function || tc;
+                const name = fn.name;
+                let args;
+                try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments) : fn.arguments; } catch { continue; }
+                if (name === 'create_events' && args.events?.length) {
+                  for (const ev of args.events) allCards.push({ date: ev.date, time: ev.time || '', endTime: ev.endTime || '', title: ev.title, location: ev.location || '', people: ev.people || '', note: ev.note || '', type: (ev.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
+                } else if (name === 'update_event' && args.event) {
+                  allCards.push({ date: args.event.date || '', time: args.event.time || '', endTime: args.event.endTime || '', title: args.event.title || '', location: args.event.location || '', people: args.event.people || '', note: args.event.note || '', type: 'event', ...args.event });
+                } else if (name === 'delete_event' && args.event) {
+                  // TODO: 删除操作 UI
+                } else if (name === 'query_events' && args.query) {
+                  // TODO: 查询操作 UI
+                }
+              }
+              if (allCards.length > 0) {
+                setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText || `已识别 ${allCards.length} 条，请确认：`, cards: allCards } : m));
+              }
+            }
+          } else if (ev.event === 'conversation.chat.completed') {
+            // 对话完成，流结束
+          } else if (ev.event === 'error') {
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: `出错了：${ev.data?.message || '未知错误'}` } : m));
+          }
+        }
+      }
+    } catch (e: unknown) {
+      const errMsg = (e as Error)?.name === 'AbortError' ? '请求超时（60秒），请重试' : '出错了，请稍后重试。';
+      setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: errMsg } : m));
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   const sendChat = async () => {
     if (!chatInput.trim() || chatLoading) return;
     const userMsg = chatInput.trim();
     setChatInput('');
     setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     setChatLoading(true);
+
+    if (aiConfig.mode === 'coze') {
+      sendCozeChat(userMsg);
+      return;
+    }
 
     try {
       const brand = AI_BRANDS[aiConfig.brand] || AI_BRANDS.deepseek;
@@ -691,19 +770,8 @@ export default function Home() {
           model: aiConfig.model,
           messages: [
             { role: 'system', content: getSystemPrompt() },
-            ...chatMessages.map(m => {
-              if (m.image && m.role === 'user') {
-                // 图片消息：image_url 原样透传，text 标签不做 Token 截断
-                return { role: 'user', content: [
-                  { type: 'image_url', image_url: { url: m.image } },
-                  { type: 'text', text: m.content },
-                ]};
-              }
-              // 纯文本消息：经过 Token 防腐层
-              return { role: m.role, content: adaptPayloadToModel(m.content, aiConfig.model) };
-            }),
-            // 当前用户输入：纯文本，经过 Token 防腐层
-            { role: 'user', content: adaptPayloadToModel(userMsg, aiConfig.model) },
+            ...chatMessages.map(m => ({ role: m.role, content: m.content })),
+            { role: 'user', content: userMsg },
           ],
           tools: CHAT_TOOLS,
         }),
@@ -1381,9 +1449,7 @@ export default function Home() {
 
       {/* AI 对话框 */}
       {showChat && (
-        <div className="fixed inset-x-0 bottom-0 z-50 flex flex-col" style={{ height: '66vh' }}
-          onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
-          onDrop={e => { e.preventDefault(); e.stopPropagation(); const file = e.dataTransfer.files?.[0]; if (file) uploadToChat(file); }}>
+        <div className="fixed inset-x-0 bottom-0 z-50 flex flex-col" style={{ height: '66vh' }}>
           {/* 日历遮罩（点击关闭） */}
           <div className="absolute inset-0 -z-10" onClick={() => setShowChat(false)} />
 
@@ -1392,14 +1458,16 @@ export default function Home() {
             <div className="flex items-center justify-between px-5 py-3 border-b border-[#E8E4DF] shrink-0">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-sm text-[#1C1C1C]">AI 助理</span>
-                {aiConfig.key ? (
+                {user?.role === 'family' ? (
+                  <span className="text-xs text-[#A0A0A0]">小菠萝 · 智能助理</span>
+                ) : aiConfig.key ? (
                   <span className="text-xs text-[#A0A0A0]">{AI_BRANDS[aiConfig.brand]?.name} · {aiConfig.model}</span>
                 ) : (
                   <span className="text-xs text-red-400">未设置 API Key</span>
                 )}
               </div>
               <div className="flex items-center gap-1">
-                {aiConfig.key && (
+                {user?.role !== 'family' && aiConfig.key && (
                   <a href={AI_BRANDS[aiConfig.brand]?.billing || '#'} target="_blank" rel="noopener"
                     className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center text-xs" title="查看费用明细">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" strokeWidth={2}/><path d="M12 9v4M12 17h.01" strokeWidth={2.5} strokeLinecap="round"/></svg>
@@ -1419,19 +1487,7 @@ export default function Home() {
                   <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
                     m.role === 'user' ? 'bg-[#ED6A3B] text-white' : 'bg-[#F3F1ED] text-[#1C1C1C]'
                   }`}>
-                    {m.image ? (
-                      <div className="space-y-1.5">
-                        <img src={m.image} alt="" className="max-w-[200px] max-h-[200px] rounded-lg object-cover" />
-                        <p className="text-xs opacity-80">{m.content.replace('[图片: ', '').replace(']', '')}</p>
-                      </div>
-                    ) : m.content.startsWith('[文件:') || m.content.startsWith('[PDF:') ? (
-                      <div className="flex items-center gap-2">
-                        <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                        <span className="truncate text-xs">{m.content.split('\n')[0].replace('[文件: ', '').replace('[PDF: ', '').replace(']', '')}</span>
-                      </div>
-                    ) : (
-                      <p className="whitespace-pre-wrap">{m.content}</p>
-                    )}
+                    <p className="whitespace-pre-wrap">{m.content}</p>
                     {m.cards && m.cards.length > 0 && (
                       <div className="mt-2 space-y-2">
                         {m.cards.map((card, ci) => (
@@ -1489,9 +1545,9 @@ export default function Home() {
                 </button>
                 <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && sendChat()}
-                  placeholder="和菠萝聊聊日程..." disabled={!aiConfig.key}
+                  placeholder="和菠萝聊聊日程..." disabled={user?.role !== 'family' && !aiConfig.key}
                   className="flex-1 bg-transparent px-2 py-2.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#A0A0A0] disabled:opacity-40" />
-                <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading || !aiConfig.key}
+                <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading || (user?.role !== 'family' && !aiConfig.key)}
                   className="w-10 h-10 bg-[#ED6A3B] hover:bg-[#D45D2E] disabled:opacity-40 rounded-xl text-white flex items-center justify-center shrink-0 transition-all">
                   <Send className="w-4 h-4" />
                 </button>
@@ -1510,51 +1566,62 @@ export default function Home() {
               <button onClick={() => setShowAiSettings(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center">&times;</button>
             </div>
 
-            {/* 品牌选择（卡片式） */}
-            <label className="text-xs text-[#A0A0A0] mb-2 block">选择品牌</label>
-            <div className="space-y-1.5 mb-4">
-              {Object.entries(AI_BRANDS).map(([k, b]) => (
-                <button key={k} onClick={() => { const m = b.models[0]?.id || ''; const c = { ...aiConfig, brand: k, model: m }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
-                  className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
-                    aiConfig.brand === k ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
-                  }`}>
-                  <div className="text-left">
-                    <div className="text-sm font-medium text-[#1C1C1C]">{b.name}</div>
-                    <div className="text-xs text-[#A0A0A0] mt-0.5">{b.models.map(m => m.label).join(' / ')} · {b.models[0]?.price}</div>
-                  </div>
-                  <a href={b.platform} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                    className="text-xs text-[#A0A0A0] hover:text-[#ED6A3B] underline shrink-0 ml-2">官网</a>
-                </button>
-              ))}
-            </div>
+            {user?.role === 'family' ? (
+              <div className="p-5 bg-[#F7F5F2] rounded-xl text-center space-y-2 mb-4">
+                <div className="text-3xl">🤖</div>
+                <div className="font-semibold text-[#1C1C1C]">小菠萝</div>
+                <div className="text-xs text-[#A0A0A0]">由 Coze 驱动的智能日程助手</div>
+                <div className="text-xs text-[#5C5C5C] bg-white rounded-lg py-2 px-3">✅ 服务已激活 · 费用由管理员统一承担，无需配置</div>
+              </div>
+            ) : (
+              <>
+                {/* 品牌选择（卡片式） */}
+                <label className="text-xs text-[#A0A0A0] mb-2 block">选择品牌</label>
+                <div className="space-y-1.5 mb-4">
+                  {Object.entries(AI_BRANDS).map(([k, b]) => (
+                    <button key={k} onClick={() => { const m = b.models[0]?.id || ''; const c = { ...aiConfig, brand: k, model: m }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
+                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
+                        aiConfig.brand === k ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
+                      }`}>
+                      <div className="text-left">
+                        <div className="text-sm font-medium text-[#1C1C1C]">{b.name}</div>
+                        <div className="text-xs text-[#A0A0A0] mt-0.5">{b.models.map(m => m.label).join(' / ')} · {b.models[0]?.price}</div>
+                      </div>
+                      <a href={b.platform} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                        className="text-xs text-[#A0A0A0] hover:text-[#ED6A3B] underline shrink-0 ml-2">官网</a>
+                    </button>
+                  ))}
+                </div>
 
-            {/* 模型选择 */}
-            <label className="text-xs text-[#A0A0A0] mb-2 block">模型版本</label>
-            <div className="space-y-1.5 mb-4">
-              {(AI_BRANDS[aiConfig.brand]?.models || []).map(m => (
-                <button key={m.id} onClick={() => { const c = { ...aiConfig, model: m.id }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
-                  className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
-                    aiConfig.model === m.id ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
-                  }`}>
-                  <div className="text-left">
-                    <div className="text-sm font-medium text-[#1C1C1C]">{m.label}</div>
-                    <div className="text-xs text-[#A0A0A0]">{m.id}</div>
-                  </div>
-                  <span className="text-xs text-[#5C5C5C]">{m.price}</span>
-                </button>
-              ))}
-            </div>
+                {/* 模型选择 */}
+                <label className="text-xs text-[#A0A0A0] mb-2 block">模型版本</label>
+                <div className="space-y-1.5 mb-4">
+                  {(AI_BRANDS[aiConfig.brand]?.models || []).map(m => (
+                    <button key={m.id} onClick={() => { const c = { ...aiConfig, model: m.id }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
+                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
+                        aiConfig.model === m.id ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
+                      }`}>
+                      <div className="text-left">
+                        <div className="text-sm font-medium text-[#1C1C1C]">{m.label}</div>
+                        <div className="text-xs text-[#A0A0A0]">{m.id}</div>
+                      </div>
+                      <span className="text-xs text-[#5C5C5C]">{m.price}</span>
+                    </button>
+                  ))}
+                </div>
 
-            {/* API Key */}
-            <label className="text-xs text-[#A0A0A0] mb-2 block">API Key</label>
-            <div className="flex gap-2 mb-4">
-              <input type="password" value={aiConfig.key} onChange={e => { const c = { ...aiConfig, key: e.target.value }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
-                placeholder="sk-..." className="flex-1 px-3 py-2.5 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-              <a href={AI_BRANDS[aiConfig.brand]?.billing || '#'} target="_blank" rel="noopener"
-                className="shrink-0 h-10 px-3 rounded-lg border border-[#E8E4DF] text-xs text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center gap-1">
-                费用明细 ↗
-              </a>
-            </div>
+                {/* API Key */}
+                <label className="text-xs text-[#A0A0A0] mb-2 block">API Key</label>
+                <div className="flex gap-2 mb-4">
+                  <input type="password" value={aiConfig.key} onChange={e => { const c = { ...aiConfig, key: e.target.value }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
+                    placeholder="sk-..." className="flex-1 px-3 py-2.5 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                  <a href={AI_BRANDS[aiConfig.brand]?.billing || '#'} target="_blank" rel="noopener"
+                    className="shrink-0 h-10 px-3 rounded-lg border border-[#E8E4DF] text-xs text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center gap-1">
+                    费用明细 ↗
+                  </a>
+                </div>
+              </>
+            )}
 
             <button onClick={() => setShowAiSettings(false)}
               className="w-full h-11 bg-[#1C1C1C] text-white rounded-lg text-sm font-semibold hover:bg-[#333] transition-colors">完成</button>
