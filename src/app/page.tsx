@@ -750,13 +750,14 @@ export default function Home() {
     if (!chatInput.trim() || chatLoading) return;
     const userMsg = chatInput.trim();
     setChatInput('');
-    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-    setChatLoading(true);
 
     if (aiConfig.mode === 'coze') {
       sendCozeChat(userMsg);
       return;
     }
+
+    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setChatLoading(true);
 
     try {
       const brand = AI_BRANDS[aiConfig.brand] || AI_BRANDS.deepseek;
