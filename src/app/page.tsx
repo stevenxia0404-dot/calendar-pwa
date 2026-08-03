@@ -662,7 +662,7 @@ export default function Home() {
           bot_id: COZE_CONFIG.botId,
           user_id: user?.id ? String(user.id) : 'guest',
           stream: true,
-          auto_save_history: true,
+          auto_save_history: false,
           additional_messages: [
             { role: 'user', content: userMsg, content_type: 'text' },
           ],
@@ -684,6 +684,7 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullText = '';
+      let eventType = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -693,28 +694,38 @@ export default function Home() {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventType = line.slice(6).trim();
+            continue;
+          }
           if (!line.startsWith('data:')) continue;
           const jsonStr = line.slice(5).trim();
           if (!jsonStr || jsonStr === '[DONE]') continue;
           let ev;
           try { ev = JSON.parse(jsonStr); } catch { continue; }
 
-          if (ev.type === 'answer' && ev.content) {
-            fullText += ev.content;
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
-          } else if (ev.type === 'function_call' && ev.function) {
-            const fn = ev.function;
-            let args;
-            try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments) : fn.arguments; } catch { continue; }
+          if (ev.type === 'answer') {
+            const chunk = ev.content || ev.reasoning_content || '';
+            if (chunk) {
+              fullText += chunk;
+              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
+            }
+          }
+
+          // conversation.message.completed 含完整消息 + 可能 tool_calls
+          if (eventType === 'conversation.message.completed' && ev.tool_calls?.length) {
             const allCards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
-            if (fn.name === 'create_events' && args.events?.length) {
-              for (const e of args.events) allCards.push({ date: e.date, time: e.time || '', endTime: e.endTime || '', title: e.title, location: e.location || '', people: e.people || '', note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
+            for (const tc of ev.tool_calls) {
+              const fn = tc.function || tc;
+              let args;
+              try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments) : fn.arguments; } catch { continue; }
+              if (fn.name === 'create_events' && args.events?.length) {
+                for (const e of args.events) allCards.push({ date: e.date, time: e.time || '', endTime: e.endTime || '', title: e.title, location: e.location || '', people: e.people || '', note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
+              }
             }
             if (allCards.length > 0) {
               setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText || `已识别 ${allCards.length} 条，请确认：`, cards: allCards } : m));
             }
-          } else if (ev.type === 'done') {
-            // 流结束
           }
         }
       }
