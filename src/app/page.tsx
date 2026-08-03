@@ -686,34 +686,26 @@ export default function Home() {
       let fullText = '';
       let eventType = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+      const processLine = (line: string) => {
+        if (line.startsWith('event:')) { eventType = line.slice(6).trim(); return; }
+        if (!line.startsWith('data:')) return;
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr || jsonStr === '[DONE]') return;
+        let ev;
+        try { ev = JSON.parse(jsonStr); } catch { return; }
 
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            eventType = line.slice(6).trim();
-            continue;
+        if (ev.type === 'answer') {
+          const chunk = ev.content || '';
+          if (chunk) {
+            fullText += chunk;
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
           }
-          if (!line.startsWith('data:')) continue;
-          const jsonStr = line.slice(5).trim();
-          if (!jsonStr || jsonStr === '[DONE]') continue;
-          let ev;
-          try { ev = JSON.parse(jsonStr); } catch { continue; }
+        }
 
-          if (ev.type === 'answer') {
-            const chunk = ev.content || '';
-            if (chunk) {
-              fullText += chunk;
-              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
-            }
-          }
-
-          // conversation.message.completed 含完整消息 + 可能 tool_calls
-          if (eventType === 'conversation.message.completed' && ev.tool_calls?.length) {
+        // conversation.message.completed：完整消息覆盖增量 + tool_calls
+        if (eventType === 'conversation.message.completed') {
+          if (ev.content) fullText = ev.content;
+          if (ev.tool_calls?.length) {
             const allCards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
             for (const tc of ev.tool_calls) {
               const fn = tc.function || tc;
@@ -728,6 +720,22 @@ export default function Home() {
             }
           }
         }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          buffer += decoder.decode();
+          buffer.split('\n').filter(Boolean).forEach(processLine);
+          if (fullText) {
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
+          }
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        lines.forEach(processLine);
       }
     } catch (e: unknown) {
       const errMsg = (e as Error)?.name === 'AbortError' ? '请求超时（60秒），请重试' : '出错了，请稍后重试。';
