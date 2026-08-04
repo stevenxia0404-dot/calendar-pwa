@@ -654,38 +654,34 @@ export default function Home() {
     const FC_BEGIN = '<|FunctionCallBegin|>';
     const FC_END = '<|FunctionCallEnd|>';
 
-    // 从全文提取函数调用 JSON → cards
-    const extractCards = (raw: string) => {
+    // 从 content 提取函数调用 → cards
+    const parseContent = (content: string) => {
       const cards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
-      const re = new RegExp(FC_BEGIN.replace(/\|/g, '\\|') + '([\\s\\S]*?)' + FC_END.replace(/\|/g, '\\|'), 'g');
-      let m;
-      while ((m = re.exec(raw)) !== null) {
-        try {
-          const calls = JSON.parse(m[1]);
-          for (const c of calls) {
-            if (c.name === 'create_events') {
-              const args = typeof c.arguments === 'string' ? JSON.parse(c.arguments) : (c.arguments || c);
-              const events = args.events || (args.event ? [args.event] : []);
-              for (const e of events) {
-                cards.push({ date: e.date, time: e.time || '', endTime: e.endTime || '', title: e.title, location: e.location || '', people: e.people || '', note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
-              }
-            }
-          }
-        } catch { /* ignore parse errors */ }
-      }
-      return cards;
-    };
+      const idxB = content.indexOf(FC_BEGIN);
+      const idxE = content.indexOf(FC_END);
+      if (idxB === -1 || idxE === -1) return { cards, text: content };
 
-    // 计算显示文本：剥离尚未闭合的函数调用标记
-    const displayText = (raw: string) => {
-      let t = raw;
-      // 移除完整的函数调用块
-      const reComplete = new RegExp(FC_BEGIN.replace(/\|/g, '\\|') + '[\\s\\S]*?' + FC_END.replace(/\|/g, '\\|'), 'g');
-      t = t.replace(reComplete, '');
-      // 移除进行中的函数调用（有 BEGIN 无 END）
-      const idx = t.indexOf(FC_BEGIN);
-      if (idx !== -1) t = t.slice(0, idx);
-      return t.trim();
+      const jsonStr = content.slice(idxB + FC_BEGIN.length, idxE);
+      let calls;
+      try { calls = JSON.parse(jsonStr); } catch { return { cards: [], text: content.slice(0, idxB).trim() }; }
+      if (!Array.isArray(calls)) calls = [calls];
+
+      for (const c of calls) {
+        if (c.name === 'create_events') {
+          const params = c.parameters || c.arguments || c;
+          // 两种格式：{events:[...],message:"..."} 或 {event:"后天开会"}
+          const events = params.events || (params.event ? [{ title: params.event, date: '', time: '', type: 'event' as const }] : []);
+          for (const e of events) {
+            cards.push({
+              date: e.date || '', time: e.time || '', endTime: e.endTime || '',
+              title: e.title || params.event || '', location: e.location || '', people: e.people || '',
+              note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task',
+            });
+          }
+        }
+      }
+      const text = content.slice(0, idxB).trim();
+      return { cards, text };
     };
 
     try {
@@ -721,20 +717,33 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullText = '';
+      let eventType = '';
+      let cardsShown = false;
 
       const processLine = (line: string) => {
+        if (line.startsWith('event:')) { eventType = line.slice(6).trim(); return; }
         if (!line.startsWith('data:')) return;
         const jsonStr = line.slice(5).trim();
         if (!jsonStr || jsonStr === '[DONE]') return;
         let ev;
         try { ev = JSON.parse(jsonStr); } catch { return; }
 
-        if (ev.type === 'answer') {
+        if (ev.type === 'answer' && eventType === 'conversation.message.delta') {
           const chunk = ev.content || '';
           if (chunk) {
             fullText += chunk;
-            const shown = displayText(fullText);
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: shown || '...' } : m));
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
+          }
+        }
+
+        if (eventType === 'conversation.message.completed' && ev.type === 'answer' && !cardsShown) {
+          const { cards, text } = parseContent(ev.content || fullText);
+          if (cards.length > 0) {
+            cardsShown = true;
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: text || `已识别 ${cards.length} 条，请确认：`, cards } : m));
+          } else if (text) {
+            fullText = text;
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
           }
         }
       };
@@ -744,13 +753,12 @@ export default function Home() {
         if (done) {
           buffer += decoder.decode();
           buffer.split('\n').filter(Boolean).forEach(processLine);
-          // 流结束：检查函数调用并展示卡片
-          const cards = extractCards(fullText);
-          if (cards.length > 0) {
-            const clean = displayText(fullText);
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: clean || `已识别 ${cards.length} 条，请确认：`, cards } : m));
-          } else if (fullText) {
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: displayText(fullText) } : m));
+          // 兜底：completed 没发但有内容
+          if (!cardsShown && fullText) {
+            const { cards, text } = parseContent(fullText);
+            if (cards.length > 0) {
+              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: text || `已识别 ${cards.length} 条，请确认：`, cards } : m));
+            }
           }
           break;
         }
