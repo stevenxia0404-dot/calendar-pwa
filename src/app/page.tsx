@@ -732,8 +732,8 @@ export default function Home() {
           const chunk = ev.content || '';
           if (chunk) {
             fullText += chunk;
-            // 检测到函数调用标记后停止流式显示，等 completed 事件统一处理
-            if (!fullText.includes(FC_BEGIN)) {
+            // 检测到函数调用标记（以<|开头）后停止显示，等 completed 统一处理
+            if (!fullText.includes('<|')) {
               setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
             }
           }
