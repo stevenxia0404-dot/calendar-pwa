@@ -1482,7 +1482,7 @@ export default function Home() {
           {/* 日历遮罩（点击关闭） */}
           <div className="absolute inset-0 -z-10" onClick={() => setShowChat(false)} />
 
-          <div className="flex-1 flex flex-col bg-white rounded-t-2xl shadow-[0_-10px_40px_rgba(0,0,0,0.15)] animate-slide-up">
+          <div className="flex-1 flex flex-col bg-white rounded-t-2xl shadow-[0_-10px_40px_rgba(0,0,0,0.15)] animate-slide-up min-h-0">
             {/* 对话框 Header */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-[#E8E4DF] shrink-0">
               <div className="flex items-center gap-2">
