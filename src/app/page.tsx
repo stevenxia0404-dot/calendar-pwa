@@ -649,8 +649,44 @@ export default function Home() {
   const sendCozeChat = async (userMsg: string) => {
     setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     setChatLoading(true);
-
     setChatMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+
+    const FC_BEGIN = '<|FunctionCallBegin|>';
+    const FC_END = '<|FunctionCallEnd|>';
+
+    // 从全文提取函数调用 JSON → cards
+    const extractCards = (raw: string) => {
+      const cards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
+      const re = new RegExp(FC_BEGIN.replace(/\|/g, '\\|') + '([\\s\\S]*?)' + FC_END.replace(/\|/g, '\\|'), 'g');
+      let m;
+      while ((m = re.exec(raw)) !== null) {
+        try {
+          const calls = JSON.parse(m[1]);
+          for (const c of calls) {
+            if (c.name === 'create_events') {
+              const args = typeof c.arguments === 'string' ? JSON.parse(c.arguments) : (c.arguments || c);
+              const events = args.events || (args.event ? [args.event] : []);
+              for (const e of events) {
+                cards.push({ date: e.date, time: e.time || '', endTime: e.endTime || '', title: e.title, location: e.location || '', people: e.people || '', note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
+              }
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      return cards;
+    };
+
+    // 计算显示文本：剥离尚未闭合的函数调用标记
+    const displayText = (raw: string) => {
+      let t = raw;
+      // 移除完整的函数调用块
+      const reComplete = new RegExp(FC_BEGIN.replace(/\|/g, '\\|') + '[\\s\\S]*?' + FC_END.replace(/\|/g, '\\|'), 'g');
+      t = t.replace(reComplete, '');
+      // 移除进行中的函数调用（有 BEGIN 无 END）
+      const idx = t.indexOf(FC_BEGIN);
+      if (idx !== -1) t = t.slice(0, idx);
+      return t.trim();
+    };
 
     try {
       const controller = new AbortController();
@@ -685,10 +721,8 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullText = '';
-      let eventType = '';
 
       const processLine = (line: string) => {
-        if (line.startsWith('event:')) { eventType = line.slice(6).trim(); return; }
         if (!line.startsWith('data:')) return;
         const jsonStr = line.slice(5).trim();
         if (!jsonStr || jsonStr === '[DONE]') return;
@@ -699,26 +733,8 @@ export default function Home() {
           const chunk = ev.content || '';
           if (chunk) {
             fullText += chunk;
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
-          }
-        }
-
-        // conversation.message.completed：完整消息覆盖增量 + tool_calls
-        if (eventType === 'conversation.message.completed') {
-          if (ev.content) fullText = ev.content;
-          if (ev.tool_calls?.length) {
-            const allCards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
-            for (const tc of ev.tool_calls) {
-              const fn = tc.function || tc;
-              let args;
-              try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments) : fn.arguments; } catch { continue; }
-              if (fn.name === 'create_events' && args.events?.length) {
-                for (const e of args.events) allCards.push({ date: e.date, time: e.time || '', endTime: e.endTime || '', title: e.title, location: e.location || '', people: e.people || '', note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task' });
-              }
-            }
-            if (allCards.length > 0) {
-              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText || `已识别 ${allCards.length} 条，请确认：`, cards: allCards } : m));
-            }
+            const shown = displayText(fullText);
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: shown || '...' } : m));
           }
         }
       };
@@ -728,8 +744,13 @@ export default function Home() {
         if (done) {
           buffer += decoder.decode();
           buffer.split('\n').filter(Boolean).forEach(processLine);
-          if (fullText) {
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
+          // 流结束：检查函数调用并展示卡片
+          const cards = extractCards(fullText);
+          if (cards.length > 0) {
+            const clean = displayText(fullText);
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: clean || `已识别 ${cards.length} 条，请确认：`, cards } : m));
+          } else if (fullText) {
+            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: displayText(fullText) } : m));
           }
           break;
         }
