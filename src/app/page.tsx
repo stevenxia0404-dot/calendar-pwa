@@ -922,7 +922,7 @@ export default function Home() {
   // ==================== UI ====================
 
   return (
-    <main className="min-h-screen pb-16 bg-[#F7F5F2] flex flex-col">
+    <main className="min-h-screen pb-16 flex flex-col">
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>
@@ -955,7 +955,7 @@ export default function Home() {
       {/* Header */}
       <header className="bg-white px-5 py-4 sm:py-5 sticky top-0 z-50 border-b border-[#E8E4DF]">
         <div className="flex flex-wrap justify-between items-center gap-y-2 max-w-full mx-auto">
-          <h1 className="text-lg font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight shrink-0">
+          <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight shrink-0">
             <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
           </h1>
           <div className="flex items-center gap-1 flex-wrap">
@@ -1443,7 +1443,7 @@ export default function Home() {
       )}
 
       {/* Calendar */}
-      <div className={`bg-white rounded-2xl p-5 shadow-sm border border-[#E8E4DF] overflow-y-auto ${detailDate ? 'md:w-3/4' : 'md:w-full'}`}>
+      <div className={`bg-white/50 backdrop-blur-md rounded-2xl p-5 shadow-sm border border-[#E8E4DF] overflow-y-auto ${detailDate ? 'md:w-3/4' : 'md:w-full'}`}>
         <div className="flex justify-between items-center mb-5">
           <h2 className="text-lg font-bold text-[#1C1C1C]">
             {currentDate.getFullYear()}年{currentDate.getMonth() + 1}月
