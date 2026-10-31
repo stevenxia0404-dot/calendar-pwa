@@ -13,6 +13,7 @@ import type { ExportRange } from '@/lib/exportLib';
 import { buildXlsx } from '@/lib/xlsxWriter';
 import { parseImportRows, looksLikeHeader, mapColumns } from '@/lib/importParser';
 import { toCsvLine } from '@/lib/csv';
+import { newId } from '@/lib/id';
 
 
 import WeekView from '@/components/WeekView';
@@ -494,7 +495,7 @@ export default function Home() {
   // 原话完整保留，用户扫一眼改掉即可（必须可修正，而非必须成功）。
   const handleParsed = (parsed: ParsedResult) => {
     const ev: ScheduleEvent = {
-      id: crypto.randomUUID(),
+      id: newId(),
       title: parsed.title || parsed.raw,
       date: parsed.date,
       time: parsed.time,
@@ -699,7 +700,7 @@ export default function Home() {
     if (drafts.length === 0) { alert('未识别到有效数据'); return; }
 
     setImportPreview(drafts.map(d => ({
-      id: crypto.randomUUID(),
+      id: newId(),
       title: d.title,
       date: d.date,
       time: d.time,
@@ -733,7 +734,7 @@ export default function Home() {
       }
     }
     // 保存导入历史
-    const group = { id: crypto.randomUUID(), name: `导入 ${new Date().toLocaleDateString('zh-CN')}`, count: deduped.length, time: new Date().toISOString() };
+    const group = { id: newId(), name: `导入 ${new Date().toLocaleDateString('zh-CN')}`, count: deduped.length, time: new Date().toISOString() };
     const groups = [group, ...importGroups].slice(0, 20);
     setImportGroups(groups);
     localStorage.setItem('schedule_import_groups', JSON.stringify(groups));
