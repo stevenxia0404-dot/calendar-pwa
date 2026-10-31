@@ -57,8 +57,24 @@ export default function WeekView({
     const dayEvents = byDate.get(narrowDate) || [];
     const timed = dayEvents.filter(e => timeToMinutes(e.time) !== null);
     const untimed = dayEvents.filter(e => timeToMinutes(e.time) === null);
+
+    // 这一周的全部记录，按天分组。
+    // 手机上没有七列时间轴，但「这一周」这段不能省 ——
+    // 写周报时要看的就是这一屏。按天分组比按时间轴更适合窄屏。
+    const weekFlow = dates.map(ds => ({
+      date: ds,
+      list: (byDate.get(ds) || []).slice().sort((a, b) => {
+        const at = timeToMinutes(a.time);
+        const bt = timeToMinutes(b.time);
+        if (at !== null && bt !== null) return at - bt;
+        if (at !== null) return -1;
+        if (bt !== null) return 1;
+        return a.title.localeCompare(b.title);
+      }),
+    })).filter(d => d.list.length > 0);
+
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
         {/* 竖向时间轴：今天这一天 */}
         <div className="bg-white/94 backdrop-blur-md rounded-2xl p-4 shadow-sm border border-[#E8E4DF]">
           <h3 className="text-sm font-semibold text-[#1C1C1C] mb-3">
@@ -87,6 +103,41 @@ export default function WeekView({
                   className="w-full text-left px-3 py-2 rounded-xl bg-[#F7F5F2] border border-[#E8E4DF] hover:bg-[#F3F1ED] transition-colors">
                   <div className="text-sm text-[#1C1C1C] font-medium">{e.title}</div>
                 </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* —— 下区：这一周，按天分组 —— */}
+        <div className="bg-white/94 backdrop-blur-md rounded-2xl p-4 shadow-sm border border-[#E8E4DF]">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-sm font-semibold text-[#1C1C1C]">这一周</h3>
+            <span className="text-xs text-[#A0A0A0]">{dates[0]} ~ {dates[6]}</span>
+          </div>
+          {weekFlow.length === 0 ? (
+            <p className="text-sm text-[#A0A0A0] py-4 text-center">这一周还没有记录</p>
+          ) : (
+            <div className="space-y-3">
+              {weekFlow.map(d => (
+                <div key={d.date}>
+                  <div className="text-xs font-semibold text-[#ED6A3B] mb-1.5">{d.date}</div>
+                  <div className="space-y-1.5">
+                    {d.list.map(e => (
+                      <button key={e.id} onClick={() => onEventClick?.(e)}
+                        className="w-full text-left px-3 py-2 rounded-xl bg-[#F7F5F2] border border-[#E8E4DF] hover:bg-[#F3F1ED] transition-colors">
+                        <div className="text-sm text-[#1C1C1C]">
+                          {e.time && <span className="text-[#ED6A3B] font-semibold mr-1.5">{e.time}</span>}
+                          {e.title}
+                        </div>
+                        {(e.location || e.people) && (
+                          <div className="text-xs text-[#A0A0A0] mt-0.5">
+                            {[e.location, e.people].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
