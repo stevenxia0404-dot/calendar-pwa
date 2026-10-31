@@ -1,7 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Download, LogOut, Mail, RefreshCw, Upload } from 'lucide-react';
+import {
+  enqueueOp, removeOp, pendingIds, readQueue, writeQueue, clearQueue, reconcile,
+} from '@/lib/syncQueue';
+import type { SyncOp, SyncPayload, CloudItem } from '@/lib/syncQueue';
 
 
 import WeekView from '@/components/WeekView';
@@ -147,7 +151,13 @@ async function api(path: string, options: RequestInit = {}, token?: string | nul
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    // 带上状态码：队列重放要区分「记录不存在」（该退回创建）
+    // 与「网络失败 / 服务端出错」（该留在队列里等重试）。
+    const err = new Error(data.error || `HTTP ${res.status}`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -167,6 +177,10 @@ interface ScheduleEvent {
   completed: boolean;
   /** 0 = 规则没解出日期，待用户确认；1 = 已确认 */
   dateConfirmed?: 0 | 1;
+  /** 这条已经同步到服务端了。
+   *  没同步过的本地记录不能被删除对账清掉 ——
+   *  否则未登录时记的东西，一登录就没了。 */
+  synced?: boolean;
 }
 
 interface User { id: number; email: string; role?: 'family' | 'user'; }
@@ -187,8 +201,12 @@ export default function Home() {
   // 认证状态
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [offline, setOffline] = useState(false);
+  // 同步状态三态（文档 11.6）：
+  //   syncing 正在重放队列或拉取
+  //   synced  队列空且上次拉取成功
+  //   offline 队列非空但网络不可用
+  const [syncState, setSyncState] = useState<'syncing' | 'synced' | 'offline'>('synced');
+  const [pendingCount, setPendingCount] = useState(0);
 
   // 激活弹窗
   const [showActivate, setShowActivate] = useState(false);
@@ -266,72 +284,220 @@ export default function Home() {
       .catch(() => { localStorage.removeItem('schedule_token'); setToken(null); setUser(null); });
   }, [token]);
 
-  // 登录后自动同步
-  useEffect(() => {
-    if (!isOnline) return;
-    const lastSync = localStorage.getItem('schedule_last_sync');
-    syncFromCloud(lastSync || undefined);
-  }, [isOnline]);
-
-  // 自动轮询（全量同步，先推后拉，无竞态）
-  useEffect(() => {
-    if (!isOnline) return;
-    const timer = setInterval(() => {
-      syncFromCloud();
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [isOnline]);
-
   // ==================== 同步 ====================
+  //
+  // v4.0 的同步是「服务端权威 + 本地操作队列」（文档第十一章）。
+  //
+  // v3 的问题很具体：写操作直接发、失败静默，同步只拉不推。
+  // 于是「一次失败上传」= 那条日程永远只在本机，其他设备看不到，
+  // 用户零感知；「删除」因为云端已物理消失，对端拉不到，也就删不掉。
+  // 这三条造成的是数据静默丢失，不是功能不可用。
+  //
+  // v4.0：所有写操作先进队列再按序重放；删除走服务端墓碑；
+  // 时间戳一律服务端生成，客户端时钟不作数。
+
+  // 同步游标按用户分开 —— 换账号时不能沿用上一个账号的游标，
+  // 否则会用错的起点做增量，拉不全新账号的数据。
+  const syncKeyRef = useRef('schedule_last_sync_anon');
+  useEffect(() => {
+    syncKeyRef.current = `schedule_last_sync_${user?.id ?? 'anon'}`;
+  }, [user?.id]);
+
+  // 轮询回调捕获的是当时的 events 与 user，会过期。
+  // 用 ref 拿最新值，避免「本地有未上传的记录却没被补传」。
+  const eventsRef = useRef<ScheduleEvent[]>([]);
+  useEffect(() => { eventsRef.current = events; }, [events]);
+
+  // 把一条记录转成上传用的内容。
+  // 不含 id 之外的元信息 —— 时间戳由服务端生成，客户端传了也会被忽略。
+  const toPayload = (e: ScheduleEvent): SyncPayload => ({
+    title: e.title,
+    date: e.date,
+    time: e.time,
+    endTime: e.endTime,
+    location: e.location,
+    people: e.people,
+    raw: e.raw,
+    type: e.type,
+    completed: e.completed,
+    dateConfirmed: e.dateConfirmed ?? 1,
+  });
+
+  // 按序重放队列。成功一条删一条；失败就停下，剩下的留着等下次。
+  // 每条操作都是幂等的，重放两次结果一样 —— 这是队列能安全重试的前提。
+  const flushQueue = async (): Promise<boolean> => {
+    if (!token) return false;
+
+    for (;;) {
+      const q = readQueue();
+      if (!q.length) { setPendingCount(0); return true; }
+      const item = q[0];
+
+      try {
+        let serverTs = 0;
+
+        if (item.op === 'delete') {
+          try {
+            const r = await api(`/events/${item.id}`, { method: 'DELETE' }, token);
+            serverTs = r.updated_at || 0;
+          } catch (e) {
+            // 服务端本来就没有这条 → 视为已删除，别把队列卡住
+            if ((e as { status?: number }).status !== 404) throw e;
+          }
+        } else if (item.op === 'create') {
+          const r = await api('/events', {
+            method: 'POST',
+            body: JSON.stringify({ id: item.id, ...item.payload }),
+          }, token);
+          serverTs = r.updated_at || 0;
+        } else {
+          try {
+            const r = await api(`/events/${item.id}`, {
+              method: 'PUT',
+              body: JSON.stringify(item.payload),
+            }, token);
+            serverTs = r.updated_at || 0;
+          } catch (e) {
+            // 服务端没有这条（旧数据，或别处删过）→ 退回创建
+            if ((e as { status?: number }).status === 404) {
+              const r = await api('/events', {
+                method: 'POST',
+                body: JSON.stringify({ id: item.id, ...item.payload }),
+              }, token);
+              serverTs = r.updated_at || 0;
+            } else throw e;
+          }
+        }
+
+        // 服务端时间回写本地。
+        // 本地时间戳若比服务端大，下次拉取会把这版判成「本地更新」，
+        // 于是服务端的版本永远拉不下来 —— 所以必须以服务端为准。
+        if (serverTs) {
+          setEvents(prev => prev.map(e =>
+            e.id === item.id ? { ...e, updatedAt: serverTs, synced: true } : e));
+        }
+
+        writeQueue(removeOp(readQueue(), item.id));
+        setPendingCount(readQueue().length);
+      } catch {
+        // 网络不通或服务端出错：原样保留队列，等下次重试
+        setSyncState('offline');
+        setPendingCount(readQueue().length);
+        return false;
+      }
+    }
+  };
+
+  // 把一条变更放进队列，然后立刻尝试推送。
+  // 没登录时不入队 —— 队列属于某个账号。
+  const enqueueChange = (op: SyncOp) => {
+    const q = enqueueOp(readQueue(), op);
+    writeQueue(q);
+    setPendingCount(q.length);
+    if (token) void flushQueue();
+  };
 
   const syncFromCloud = async (since?: string) => {
     if (!token) return false;
-    setIsSyncing(true);
+    setSyncState('syncing');
     try {
-      const qs = since ? `?since=${encodeURIComponent(since)}` : '';
-      const { events: cloudEvents } = await api(`/events${qs}`, {}, token);
-
-      setEvents(prev => {
-        // 全量+增量统一用合并：本地新数据不会被云端的旧数据覆盖
-        const map = new Map(prev.map(e => [e.id, e]));
-        for (const ce of cloudEvents) {
-          const local = map.get(ce.id);
-          if (!local || ce.updated_at > local.updatedAt) {
-            map.set(ce.id, {
-              id: ce.id, title: ce.title, date: ce.date, time: ce.time || '',
-              endTime: ce.end_time || '', location: ce.location || '', people: ce.people || '',
-              raw: ce.raw || '', type: (ce.type || 'event') as 'event' | 'task',
-              completed: !!ce.completed, updatedAt: ce.updated_at,
-              dateConfirmed: (ce.date_confirmed ?? 1) as 0 | 1,
-            });
-          }
+      // 本地还没同步过的记录补传上去。
+      // 没登录时记的东西不能因为登录而消失，也不能永远躺在本机。
+      const unsynced = eventsRef.current.filter(e => e.synced !== true);
+      if (unsynced.length) {
+        let q = readQueue();
+        for (const e of unsynced) {
+          q = enqueueOp(q, {
+            id: e.id, op: 'create', payload: toPayload(e), ts: e.updatedAt || Date.now(),
+          });
         }
-        return Array.from(map.values());
-      });
-      localStorage.setItem('schedule_last_sync', String(Date.now()));
-      setOffline(false);
+        writeQueue(q);
+        setPendingCount(q.length);
+      }
+
+      // 先推后拉：本地还没上传的变更优先。
+      // 反过来的话，拉回来的旧数据会把刚写的东西盖掉。
+      if (!(await flushQueue())) return false;
+
+      const qs = since ? `?since=${encodeURIComponent(since)}` : '';
+      const { events: cloudEvents, server_time } = await api(`/events${qs}`, {}, token);
+
+      const items: CloudItem<ScheduleEvent>[] = (cloudEvents || []).map((ce: {
+        id: string; updated_at: number; deleted_at?: number; title: string; date: string;
+        time?: string; end_time?: string; location?: string; people?: string; raw?: string;
+        type?: string; completed?: number; date_confirmed?: number;
+      }) => ({
+        id: ce.id,
+        updatedAt: ce.updated_at,
+        deleted: !!ce.deleted_at,
+        value: ce.deleted_at ? null : {
+          id: ce.id,
+          title: ce.title,
+          date: ce.date,
+          time: ce.time || '',
+          endTime: ce.end_time || '',
+          location: ce.location || '',
+          people: ce.people || '',
+          raw: ce.raw || '',
+          type: (ce.type || 'event') as 'event' | 'task',
+          completed: !!ce.completed,
+          dateConfirmed: (ce.date_confirmed ?? 1) as 0 | 1,
+          updatedAt: ce.updated_at,
+          synced: true,
+        },
+      }));
+
+      // 全量拉取才做删除对账；增量只管「变了的」。
+      setEvents(prev => reconcile(prev, items, pendingIds(readQueue()), !since));
+
+      localStorage.setItem(syncKeyRef.current, String(server_time || Date.now()));
+      setSyncState('synced');
       return true;
     } catch {
       // 拉不到就是离线待同步。顶栏那个点的意义是「我记的东西不会丢」，
       // 所以离线必须让人看得见，不能继续静默失败。
-      setOffline(true);
+      setSyncState('offline');
       return false;
     }
-    finally { setIsSyncing(false); }
   };
 
-  const pushToCloud = async (event: ScheduleEvent, method: 'POST' | 'PUT' | 'DELETE') => {
-    if (!token) return;
-    try {
-      if (method === 'DELETE') {
-        await api(`/events/${event.id}`, { method: 'DELETE' }, token);
-      } else if (method === 'PUT') {
-        await api(`/events/${event.id}`, { method: 'PUT', body: JSON.stringify({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, location: event.location, people: event.people, raw: event.raw, updatedAt: event.updatedAt, type: event.type, completed: event.completed, dateConfirmed: event.dateConfirmed ?? 1 }) }, token);
-      } else {
-        await api('/events', { method: 'POST', body: JSON.stringify(event) }, token);
-      }
-    } catch { /* 静默失败，下次同步修复 */ }
-  };
+  // 登录后自动同步（首次全量，之后按游标增量）
+  useEffect(() => {
+    if (!isOnline) return;
+    const since = localStorage.getItem(syncKeyRef.current);
+    void syncFromCloud(since || undefined);
+  }, [isOnline]);
+
+  // 30 秒增量轮询
+  useEffect(() => {
+    if (!isOnline) return;
+    const timer = setInterval(() => {
+      const since = localStorage.getItem(syncKeyRef.current);
+      void syncFromCloud(since || undefined);
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [isOnline]);
+
+  // 每 10 分钟一次全量拉取 —— 做删除对账，
+  // 兜住「设备太久没上线，墓碑已被服务端回收」的情况
+  useEffect(() => {
+    if (!isOnline) return;
+    const timer = setInterval(() => {
+      void syncFromCloud(undefined);
+    }, 10 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [isOnline]);
+
+  // 网络恢复立刻补传
+  useEffect(() => {
+    if (!isOnline) return;
+    const onOnline = () => {
+      const since = localStorage.getItem(syncKeyRef.current);
+      void syncFromCloud(since || undefined);
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [isOnline]);
 
   // ==================== 认证操作 ====================
 
@@ -372,6 +538,10 @@ export default function Home() {
   const handleLogout = () => {
     localStorage.removeItem('schedule_token');
     localStorage.removeItem('schedule_last_sync');
+    // 队列属于这个账号 —— 登出时清掉，
+    // 别把上一个账号的待推变更推到下一个账号去
+    clearQueue();
+    setPendingCount(0);
     setToken(null); setUser(null);
   };
 
@@ -417,7 +587,9 @@ export default function Home() {
       dateConfirmed: parsed.dateConfirmed,
     };
     setEvents(prev => [...prev, ev]);
-    if (isOnline && token) pushToCloud(ev, 'POST');
+    if (isOnline && token) {
+      enqueueChange({ id: ev.id, op: 'create', payload: toPayload(ev), ts: Date.now() });
+    }
     setDetailDate(parsed.date);
   };
 
@@ -447,8 +619,16 @@ export default function Home() {
       dateConfirmed: editForm.date !== existing?.date ? 1 : (existing?.dateConfirmed ?? 1),
     };
 
-    if (isOnline && token) await pushToCloud(updated, 'PUT');
     setEvents(prev => prev.map(e => e.id === editingEventId ? updated : e));
+    if (isOnline && token) {
+      enqueueChange({
+        id: updated.id,
+        // 没同步过的记录要走创建，不能走更新（服务端还不认识它）
+        op: existing?.synced ? 'update' : 'create',
+        payload: toPayload(updated),
+        ts: Date.now(),
+      });
+    }
 
     setEditingEventId(null);
     if (detailDate !== editForm.date) setDetailDate(editForm.date);
@@ -456,15 +636,28 @@ export default function Home() {
 
   const deleteEvent = async (id: string) => {
     if (!confirm('确定要删除这个日程吗？')) return;
-    const ev = events.find(e => e.id === id);
-    if (isOnline && token && ev) await pushToCloud(ev, 'DELETE');
     setEvents(prev => prev.filter(e => e.id !== id));
+    if (isOnline && token) {
+      // 墓碑语义：服务端会留一条删除标记，同步给其它设备，
+      // 它们收到后本地也删 —— 这样删除才能跨设备传播。
+      enqueueChange({ id, op: 'delete', ts: Date.now() });
+    }
   };
 
   const toggleTaskCompleted = async (id: string) => {
-    setEvents(prev => prev.map(e => e.id === id ? { ...e, completed: !e.completed, updatedAt: Date.now() } : e));
+    const ev = events.find(e => e.id === id);
+    if (!ev) return;
+    const next = { ...ev, completed: !ev.completed, updatedAt: Date.now() };
+    setEvents(prev => prev.map(e => e.id === id ? next : e));
     if (isOnline && token) {
-      try { await api(`/events/${id}/toggle`, { method: 'PUT' }, token); } catch { /* ignore */ }
+      // 走通用更新而不是「服务端翻转」的接口 ——
+      // 翻转型接口重放两次会互相抵消，而队列重放必须幂等。
+      enqueueChange({
+        id,
+        op: ev.synced ? 'update' : 'create',
+        payload: toPayload(next),
+        ts: Date.now(),
+      });
     }
   };
 
@@ -585,18 +778,22 @@ export default function Home() {
 
   const confirmImport = () => {
     if (!importPreview) return;
-    setEvents(prev => {
-      const existing = new Set(prev.map(e => `${e.date}|${e.time}|${e.title}`));
-      const deduped = importPreview.filter(e => !existing.has(`${e.date}|${e.time}|${e.title}`));
-      const added = [...prev, ...deduped];
-      if (isOnline && token) deduped.forEach(e => pushToCloud(e, 'POST'));
-      // 保存导入历史
-      const group = { id: crypto.randomUUID(), name: `导入 ${new Date().toLocaleDateString('zh-CN')}`, count: deduped.length, time: new Date().toISOString() };
-      const groups = [group, ...importGroups].slice(0, 20);
-      setImportGroups(groups);
-      localStorage.setItem('schedule_import_groups', JSON.stringify(groups));
-      return added;
-    });
+    // 去重与推送都要在 setEvents 的 updater 外面做 ——
+    // updater 必须是纯函数。放在里面发网络请求，React 的 StrictMode
+    // 会把它跑两遍，结果是同一批记录被推送两次。
+    const existing = new Set(events.map(e => `${e.date}|${e.time}|${e.title}`));
+    const deduped = importPreview.filter(e => !existing.has(`${e.date}|${e.time}|${e.title}`));
+    setEvents(prev => [...prev, ...deduped]);
+    if (isOnline && token) {
+      for (const e of deduped) {
+        enqueueChange({ id: e.id, op: 'create', payload: toPayload(e), ts: e.updatedAt || Date.now() });
+      }
+    }
+    // 保存导入历史
+    const group = { id: crypto.randomUUID(), name: `导入 ${new Date().toLocaleDateString('zh-CN')}`, count: deduped.length, time: new Date().toISOString() };
+    const groups = [group, ...importGroups].slice(0, 20);
+    setImportGroups(groups);
+    localStorage.setItem('schedule_import_groups', JSON.stringify(groups));
     setImportPreview(null);
     setShowImportModal(false);
   };
@@ -661,19 +858,28 @@ export default function Home() {
           </h1>
           <div className="flex items-center gap-1 flex-wrap">
             <div className="relative group">
-              <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${isOnline ? 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]' : 'bg-[#D9D4CF]'}`} />
+              <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${
+                !isOnline ? 'bg-[#D9D4CF]'
+                  : syncState === 'syncing' ? 'bg-[#ED6A3B] animate-pulse'
+                  : syncState === 'offline' ? 'bg-[#D9D4CF]'
+                  : 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]'
+              }`} />
               <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-[60] shadow-lg">
                 {isOnline ? (
-                  <><span className="text-[#34d399]">●</span> {user?.email}<br /><span className="text-[#A0A0A0]">已激活 · 多设备自动同步</span></>
+                  <><span className="text-[#34d399]">●</span> {user?.email}<br /><span className="text-[#A0A0A0]">
+                    {syncState === 'syncing' ? '正在同步…'
+                      : syncState === 'offline' ? `离线待同步${pendingCount ? ` · ${pendingCount} 条待传` : ''}`
+                      : '已同步 · 多设备自动同步'}
+                  </span></>
                 ) : (
                   '未登录，点击右侧激活'
                 )}
               </div>
             </div>
             {isOnline && (
-              <button onClick={() => syncFromCloud()} disabled={isSyncing}
+              <button onClick={() => void syncFromCloud()} disabled={syncState === 'syncing'}
                 className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="同步" title="同步">
-                <RefreshCw className={`w-4 h-4 text-[#A0A0A0] ${isSyncing ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-4 h-4 text-[#A0A0A0] ${syncState === 'syncing' ? 'animate-spin' : ''}`} />
               </button>
             )}
             {isOnline ? (
@@ -1217,7 +1423,8 @@ export default function Home() {
         apiBase={API_BASE}
         token={token}
         onSubmit={handleParsed}
-        syncState={isSyncing ? 'syncing' : offline ? 'offline' : 'synced'}
+        syncState={syncState}
+        pendingCount={pendingCount}
         isNarrow={isNarrow}
       />
     </main>

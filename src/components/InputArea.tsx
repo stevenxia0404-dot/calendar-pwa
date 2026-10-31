@@ -36,6 +36,8 @@ export interface InputAreaProps {
   onSubmit: (parsed: ParsedResult) => void;
   /** 同步状态 */
   syncState: 'syncing' | 'synced' | 'offline';
+  /** 队列里还有几条没传上去 */
+  pendingCount?: number;
   /** 窄屏 */
   isNarrow: boolean;
 }
@@ -43,7 +45,7 @@ export interface InputAreaProps {
 type VoiceState = 'idle' | 'recording' | 'transcribing' | 'browser';
 
 export default function InputArea({
-  apiBase, token, onSubmit, syncState, isNarrow,
+  apiBase, token, onSubmit, syncState, pendingCount = 0, isNarrow,
 }: InputAreaProps) {
   const [text, setText] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -179,11 +181,15 @@ export default function InputArea({
 
   // ==================== 同步状态 ====================
 
-  const syncLabel = {
-    syncing: '同步中',
-    synced: '已同步',
-    offline: '离线待同步',
-  }[syncState];
+  // 队列非空时把条数显示出来 —— 「离线待同步」这四个字
+  // 让人知道东西还在，但不知道有多少、是不是真在等。
+  const syncLabel = pendingCount > 0
+    ? `${syncState === 'offline' ? '离线待同步' : '待同步'} ${pendingCount}`
+    : {
+        syncing: '同步中',
+        synced: '已同步',
+        offline: '离线待同步',
+      }[syncState];
   const syncColor = {
     syncing: 'bg-[#ED6A3B]',
     synced: 'bg-[#059669]',
