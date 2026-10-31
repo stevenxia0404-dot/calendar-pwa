@@ -4,7 +4,10 @@
   "description": "菠萝日程后端API",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "migrate": "node scripts/migrate.mjs",
+    "migrate:remote": "node scripts/migrate.mjs --remote",
+    "migrate:list": "node scripts/migrate.mjs --list"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
