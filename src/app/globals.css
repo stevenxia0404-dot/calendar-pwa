@@ -17,7 +17,7 @@
 body {
   color: var(--foreground);
   background-color: #F7F5F2;
-  background-image: linear-gradient(rgba(247, 245, 242, 0.6), rgba(247, 245, 242, 0.6)), url('/background.webp');
+  background-image: linear-gradient(rgba(247, 245, 242, 0.82), rgba(247, 245, 242, 0.82)), url('/background.webp');
   background-size: cover;
   background-position: center;
   background-attachment: fixed;

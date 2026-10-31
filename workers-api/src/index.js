@@ -558,7 +558,7 @@ export default {
         if (!row) return json({ error: 'Invalid token' }, 401, headers);
 
         const { results: evts } = await env.DB.prepare(
-          'SELECT id, title, date, time, end_time, location, people, raw, type, completed, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
+          'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
         ).bind(row.user_id).all();
 
         const toUTC = (d, t) => {
@@ -640,7 +640,7 @@ export default {
       // 获取日程（支持增量同步）
       if (path === '/events' && method === 'GET') {
         const since = url.searchParams.get('since');
-        let query = 'SELECT id, title, date, time, end_time, location, people, raw, type, completed, updated_at FROM events WHERE user_id = ?';
+        let query = 'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ?';
         const params = [userId];
 
         if (since) {
@@ -656,7 +656,7 @@ export default {
 
       // 创建日程
       if (path === '/events' && method === 'POST') {
-        const { id, title, date, time, endTime, location, people, raw, updatedAt, type, completed } = await request.json();
+        const { id, title, date, time, endTime, location, people, raw, updatedAt, type, completed, dateConfirmed } = await request.json();
         if (!title || !date) {
           return json({ error: '缺少必填字段' }, 400, headers);
         }
@@ -677,8 +677,8 @@ export default {
         }
 
         await env.DB.prepare(
-          'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, updated_at = excluded.updated_at'
-        ).bind(eventId, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
+          'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, updated_at = excluded.updated_at'
+        ).bind(eventId, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, dateConfirmed === 0 ? 0 : 1, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
       }

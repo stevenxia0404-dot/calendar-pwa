@@ -1,7 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, MessageCircle, X, Mic } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ChevronLeft, ChevronRight, Download, LogOut, Mail, RefreshCw, Upload } from 'lucide-react';
+
+
+import WeekView from '@/components/WeekView';
+import InputArea from '@/components/InputArea';
+import { ParsedResult } from '@/lib/dateParser';
+import { toDateString as weekToDateString, weekDates } from '@/lib/weekLogic';
 
 // ==================== 配置 ====================
 
@@ -10,11 +16,6 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://schedule-api.boluom
 // 导入文件大小上限。课表正常在几百 KB 以内，5MB 足够，
 // 同时能挡住构造出来的超大文件把浏览器内存拖垮。
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
-
-const COZE_CONFIG = {
-  botId: '7669756491917721651',
-  apiUrl: 'https://schedule-api.boluomate.com/ai/chat',
-};
 
 // ==================== 工具函数 ====================
 
@@ -164,6 +165,8 @@ interface ScheduleEvent {
   updatedAt: number;
   type: 'event' | 'task';
   completed: boolean;
+  /** 0 = 规则没解出日期，待用户确认；1 = 已确认 */
+  dateConfirmed?: 0 | 1;
 }
 
 interface User { id: number; email: string; role?: 'family' | 'user'; }
@@ -173,26 +176,19 @@ interface User { id: number; email: string; role?: 'family' | 'user'; }
 export default function Home() {
   // 日程状态
   const [events, setEvents] = useState<ScheduleEvent[]>([]);
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState(new Date());
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ title: '', date: '', time: '', endTime: '', location: '', people: '' });
 
-  // 对话框状态
-  const [showChat, setShowChat] = useState(false);
-  const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string; cards?: { date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }[] }[]>([]);
-  const [aiConfig, setAiConfig] = useState<{ brand: string; model: string; key: string; mode: 'coze' | 'direct' }>({ brand: 'deepseek', model: 'deepseek-v4-flash', key: '', mode: 'direct' });
-  const [showAiSettings, setShowAiSettings] = useState(false);
-  const [chatLoading, setChatLoading] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // v4.0：周视图锚点（周内任意一天即可）与窄屏判定
+  const [weekAnchor, setWeekAnchor] = useState(new Date());
+  const [isNarrow, setIsNarrow] = useState(false);
 
   // 认证状态
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [offline, setOffline] = useState(false);
 
   // 激活弹窗
   const [showActivate, setShowActivate] = useState(false);
@@ -206,14 +202,14 @@ export default function Home() {
   const [icalCopied, setIcalCopied] = useState(false);
   const [showVersionModal, setShowVersionModal] = useState(false);
 
-  // v2.0 更新弹窗（首次访问展示一次）
+  // 版本更新弹窗（首次访问展示一次）
   useEffect(() => {
     const seen = localStorage.getItem('schedule_version_seen');
-    if (seen !== 'v2.0') setShowVersionModal(true);
+    if (seen !== 'v4.0') setShowVersionModal(true);
   }, []);
 
   const dismissVersionModal = () => {
-    localStorage.setItem('schedule_version_seen', 'v2.0');
+    localStorage.setItem('schedule_version_seen', 'v4.0');
     setShowVersionModal(false);
   };
 
@@ -236,6 +232,14 @@ export default function Home() {
   };
 
   const isOnline = !!user && !!token;
+
+  // 窄屏判定：手机上降级为单日竖向时间轴（每列 50px 的七列没法看）
+  useEffect(() => {
+    const check = () => setIsNarrow(window.innerWidth < 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
 
   // ==================== 初始化 ====================
 
@@ -281,7 +285,7 @@ export default function Home() {
   // ==================== 同步 ====================
 
   const syncFromCloud = async (since?: string) => {
-    if (!token) return;
+    if (!token) return false;
     setIsSyncing(true);
     try {
       const qs = since ? `?since=${encodeURIComponent(since)}` : '';
@@ -293,13 +297,26 @@ export default function Home() {
         for (const ce of cloudEvents) {
           const local = map.get(ce.id);
           if (!local || ce.updated_at > local.updatedAt) {
-            map.set(ce.id, { id: ce.id, title: ce.title, date: ce.date, time: ce.time || '', endTime: ce.end_time || '', location: ce.location || '', people: ce.people || '', raw: ce.raw || '', type: (ce.type || 'event') as 'event' | 'task', completed: !!ce.completed, updatedAt: ce.updated_at });
+            map.set(ce.id, {
+              id: ce.id, title: ce.title, date: ce.date, time: ce.time || '',
+              endTime: ce.end_time || '', location: ce.location || '', people: ce.people || '',
+              raw: ce.raw || '', type: (ce.type || 'event') as 'event' | 'task',
+              completed: !!ce.completed, updatedAt: ce.updated_at,
+              dateConfirmed: (ce.date_confirmed ?? 1) as 0 | 1,
+            });
           }
         }
         return Array.from(map.values());
       });
       localStorage.setItem('schedule_last_sync', String(Date.now()));
-    } catch { /* 静默失败 */ }
+      setOffline(false);
+      return true;
+    } catch {
+      // 拉不到就是离线待同步。顶栏那个点的意义是「我记的东西不会丢」，
+      // 所以离线必须让人看得见，不能继续静默失败。
+      setOffline(true);
+      return false;
+    }
     finally { setIsSyncing(false); }
   };
 
@@ -309,7 +326,7 @@ export default function Home() {
       if (method === 'DELETE') {
         await api(`/events/${event.id}`, { method: 'DELETE' }, token);
       } else if (method === 'PUT') {
-        await api(`/events/${event.id}`, { method: 'PUT', body: JSON.stringify({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, location: event.location, people: event.people, raw: event.raw, updatedAt: event.updatedAt, type: event.type, completed: event.completed }) }, token);
+        await api(`/events/${event.id}`, { method: 'PUT', body: JSON.stringify({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, location: event.location, people: event.people, raw: event.raw, updatedAt: event.updatedAt, type: event.type, completed: event.completed, dateConfirmed: event.dateConfirmed ?? 1 }) }, token);
       } else {
         await api('/events', { method: 'POST', body: JSON.stringify(event) }, token);
       }
@@ -380,6 +397,30 @@ export default function Home() {
     } catch { /* fallback */ }
   };
 
+  // ==================== 一句话就记 ====================
+
+  // 解析结果 → 一条记录。规则解不出日期时落今天并标待确认，
+  // 原话完整保留，用户扫一眼改掉即可（必须可修正，而非必须成功）。
+  const handleParsed = (parsed: ParsedResult) => {
+    const ev: ScheduleEvent = {
+      id: crypto.randomUUID(),
+      title: parsed.title || parsed.raw,
+      date: parsed.date,
+      time: parsed.time,
+      endTime: '',
+      location: '',
+      people: '',
+      raw: parsed.raw,
+      updatedAt: Date.now(),
+      type: parsed.time ? 'event' : 'task',
+      completed: false,
+      dateConfirmed: parsed.dateConfirmed,
+    };
+    setEvents(prev => [...prev, ev]);
+    if (isOnline && token) pushToCloud(ev, 'POST');
+    setDetailDate(parsed.date);
+  };
+
   // ==================== 日程操作 ====================
 
   const startEdit = (event: ScheduleEvent) => {
@@ -402,6 +443,8 @@ export default function Home() {
       updatedAt: Date.now(),
       type: existing?.type || 'event',
       completed: existing?.completed || false,
+      // 用户手动改过日期就算确认了，「待确认」标记该消失
+      dateConfirmed: editForm.date !== existing?.date ? 1 : (existing?.dateConfirmed ?? 1),
     };
 
     if (isOnline && token) await pushToCloud(updated, 'PUT');
@@ -564,382 +607,7 @@ export default function Home() {
     localStorage.setItem('schedule_import_groups', JSON.stringify(groups));
   };
 
-  // ==================== AI 对话框 ====================
-
-  const AI_BRANDS: Record<string, { name: string; endpoint: string; platform: string; billing: string; models: { id: string; label: string; price: string }[] }> = {
-    deepseek: {
-      name: 'DeepSeek', endpoint: 'https://api.deepseek.com/v1/chat/completions', platform: 'https://platform.deepseek.com', billing: 'https://platform.deepseek.com/usage',
-      models: [
-        { id: 'deepseek-v4-flash', label: 'V4 Flash', price: '¥1.0/百万token' },
-        { id: 'deepseek-v4-pro', label: 'V4 Pro', price: '¥3.1/百万token' },
-      ],
-    },
-    kimi: {
-      name: 'Kimi 月之暗面', endpoint: 'https://api.moonshot.cn/v1/chat/completions', platform: 'https://platform.kimi.com', billing: 'https://platform.kimi.com/console/account',
-      models: [
-        { id: 'kimi-k2.6', label: 'K2.6', price: '¥4.3/百万token' },
-        { id: 'kimi-k2.5', label: 'K2.5 多模态', price: '¥4.3/百万token' },
-      ],
-    },
-    doubao: {
-      name: '豆包', endpoint: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions', platform: 'https://console.volcengine.com/ark', billing: 'https://console.volcengine.com/ark/region:ark+cn-beijing/billing',
-      models: [
-        { id: 'doubao-pro', label: 'Pro', price: '¥2.0/百万token' },
-        { id: 'doubao-lite', label: 'Lite', price: '¥0.8/百万token' },
-      ],
-    },
-    qwen: {
-      name: '通义千问', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', platform: 'https://dashscope.console.aliyun.com', billing: 'https://dashscope.console.aliyun.com/billing',
-      models: [
-        { id: 'qwen-turbo', label: 'Turbo', price: '¥2.0/百万token' },
-        { id: 'qwen-plus', label: 'Plus', price: '¥4.0/百万token' },
-      ],
-    },
-    glm: {
-      name: '智谱 GLM', endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', platform: 'https://open.bigmodel.cn', billing: 'https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys',
-      models: [
-        { id: 'glm-4-flash', label: 'GLM-4 Flash', price: '¥0.1/百万token' },
-      ],
-    },
-  };
-
-  useEffect(() => {
-    const saved = localStorage.getItem('schedule_ai_config');
-    if (saved) { try { const c = JSON.parse(saved); setAiConfig({ ...c, mode: c.mode || 'direct' }); } catch { /* ignore */ } }
-  }, []);
-
-  // 白名单用户自动切换 Coze 模式
-  useEffect(() => {
-    if (user?.role === 'family') {
-      setAiConfig(prev => ({ ...prev, mode: 'coze' }));
-    }
-  }, [user]);
-
-  const getSystemPrompt = () => `你是菠萝日程的AI助手。当前日期：${formatLocalDate(new Date())}。根据用户输入，调用对应函数处理日程或回复聊天。
-
-规则：
-- 有明确时间段的归为event，只说"今天/明天做XX"没有具体时间的归为task（time留空）
-- "后天"=当前日期+2天，"下周X"按当前日期推算
-- 闲聊或回答问题用文字直接回复，不要调用函数`;
-
-  const CHAT_TOOLS = [{
-    type: 'function' as const,
-    function: {
-      name: 'create_events',
-      description: '创建新日程或任务。当用户描述有时间、日期的安排、计划、待办事项时调用。',
-      parameters: {
-        type: 'object',
-        properties: {
-          events: {
-            type: 'array',
-            description: '要创建的日程/任务列表',
-            items: {
-              type: 'object',
-              properties: {
-                date: { type: 'string', description: '日期 YYYY-MM-DD' },
-                time: { type: 'string', description: '开始时间 HH:mm，无具体时间则留空字符串' },
-                endTime: { type: 'string', description: '结束时间 HH:mm' },
-                title: { type: 'string', description: '事项标题' },
-                location: { type: 'string', description: '地点，如教室/会议室' },
-                people: { type: 'string', description: '相关人员' },
-                note: { type: 'string', description: '备注或补充信息' },
-                type: { type: 'string', enum: ['event', 'task'], description: 'event=有明确时间段的事项, task=待办/无固定时间' },
-              },
-              required: ['date', 'title', 'type'],
-            },
-          },
-          message: { type: 'string', description: '给用户的确认提示语' },
-        },
-        required: ['events'],
-      },
-    },
-  }];
-
-  const toggleRecording = () => {
-    if (isRecording) {
-      recognitionRef.current?.stop();
-      recognitionRef.current = null;
-      setIsRecording(false);
-      return;
-    }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
-    const r = new SR();
-    r.lang = 'zh-CN';
-    r.interimResults = false;
-    r.continuous = false;
-    r.onresult = (e: SpeechRecognitionEvent) => {
-      setChatInput(prev => prev + e.results[0][0].transcript);
-    };
-    r.onerror = () => setIsRecording(false);
-    r.onend = () => setIsRecording(false);
-    r.start();
-    recognitionRef.current = r;
-    setIsRecording(true);
-  };
-
-  const sendCozeChat = async (userMsg: string) => {
-    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-    setChatLoading(true);
-    setChatMessages(prev => [...prev, { role: 'assistant', content: '' }]);
-
-    const FC_BEGIN = '<|FunctionCallBegin|>';
-    const FC_END = '<|FunctionCallEnd|>';
-
-    // 从 content 提取函数调用 → cards
-    const parseContent = (content: string) => {
-      const cards: Array<{ date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }> = [];
-      const idxB = content.indexOf(FC_BEGIN);
-      const idxE = content.indexOf(FC_END);
-      if (idxB === -1 || idxE === -1) return { cards, text: content };
-
-      const jsonStr = content.slice(idxB + FC_BEGIN.length, idxE);
-      let calls;
-      try { calls = JSON.parse(jsonStr); } catch { return { cards: [], text: content.slice(0, idxB).trim() }; }
-      if (!Array.isArray(calls)) calls = [calls];
-
-      for (const c of calls) {
-        if (c.name === 'create_events') {
-          const params = c.parameters || c.arguments || c;
-          // 两种格式：{events:[...],message:"..."} 或 {event:"后天开会"}
-          const events = params.events || (params.event ? [{ title: params.event, date: '', time: '', type: 'event' as const }] : []);
-          for (const e of events) {
-            cards.push({
-              date: e.date || '', time: e.time || '', endTime: e.endTime || '',
-              title: e.title || params.event || '', location: e.location || '', people: e.people || '',
-              note: e.note || '', type: (e.type === 'task' ? 'task' : 'event') as 'event' | 'task',
-            });
-          }
-        }
-      }
-      const text = content.slice(0, idxB).trim();
-      return { cards, text };
-    };
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60000);
-      const res = await fetch(COZE_CONFIG.apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          bot_id: COZE_CONFIG.botId,
-          user_id: user?.id ? String(user.id) : 'guest',
-          stream: true,
-          auto_save_history: false,
-          tools: CHAT_TOOLS,
-          additional_messages: [
-            { role: 'user', content: userMsg, content_type: 'text' },
-          ],
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      if (!res.ok) {
-        const errText = await res.text();
-        setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: `Coze API 错误（${res.status}）：${errText.slice(0, 100)}` } : m));
-        setChatLoading(false);
-        return;
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) { setChatLoading(false); return; }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullText = '';
-      let eventType = '';
-      let cardsShown = false;
-
-      const processLine = (line: string) => {
-        if (line.startsWith('event:')) { eventType = line.slice(6).trim(); return; }
-        if (!line.startsWith('data:')) return;
-        const jsonStr = line.slice(5).trim();
-        if (!jsonStr || jsonStr === '[DONE]') return;
-        let ev;
-        try { ev = JSON.parse(jsonStr); } catch { return; }
-
-        if (ev.type === 'answer' && eventType === 'conversation.message.delta') {
-          const chunk = ev.content || '';
-          if (chunk) {
-            fullText += chunk;
-            // 检测到函数调用标记（以<|开头）后停止显示，等 completed 统一处理
-            if (!fullText.includes('<|')) {
-              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
-            }
-          }
-        }
-
-        if (eventType === 'conversation.message.completed' && ev.type === 'answer' && !cardsShown) {
-          const { cards, text } = parseContent(ev.content || fullText);
-          if (cards.length > 0) {
-            cardsShown = true;
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: text || `已识别 ${cards.length} 条，请确认：`, cards } : m));
-          } else if (text) {
-            fullText = text;
-            setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: fullText } : m));
-          }
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          buffer += decoder.decode();
-          buffer.split('\n').filter(Boolean).forEach(processLine);
-          // 兜底：completed 没发但有内容
-          if (!cardsShown && fullText) {
-            const { cards, text } = parseContent(fullText);
-            if (cards.length > 0) {
-              setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: text || `已识别 ${cards.length} 条，请确认：`, cards } : m));
-            }
-          }
-          break;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        lines.forEach(processLine);
-      }
-    } catch (e: unknown) {
-      const errMsg = (e as Error)?.name === 'AbortError' ? '请求超时（60秒），请重试' : '出错了，请稍后重试。';
-      setChatMessages(prev => prev.map(m => m.role === 'assistant' && m.content === '' ? { ...m, content: errMsg } : m));
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
-  const sendChat = async () => {
-    if (!chatInput.trim() || chatLoading) return;
-    const userMsg = chatInput.trim();
-    setChatInput('');
-
-    if (aiConfig.mode === 'coze') {
-      sendCozeChat(userMsg);
-      return;
-    }
-
-    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-    setChatLoading(true);
-
-    try {
-      const brand = AI_BRANDS[aiConfig.brand] || AI_BRANDS.deepseek;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60000);
-      const res = await fetch(brand.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiConfig.key}` },
-        body: JSON.stringify({
-          model: aiConfig.model,
-          messages: [
-            { role: 'system', content: getSystemPrompt() },
-            ...chatMessages.map(m => ({ role: m.role, content: m.content })),
-            { role: 'user', content: userMsg },
-          ],
-          tools: CHAT_TOOLS,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      const data = await res.json();
-      if (!res.ok) {
-        const errMsg = data.error?.message || `HTTP ${res.status}`;
-        setChatMessages(prev => [...prev, { role: 'assistant', content: `API 错误：${errMsg}` }]);
-        setChatLoading(false);
-        return;
-      }
-      const choice = data.choices?.[0];
-      const msg = choice?.message;
-      if (!msg) {
-        setChatMessages(prev => [...prev, { role: 'assistant', content: 'API 返回为空，请检查 Key 和模型名称是否正确。' }]);
-        setChatLoading(false);
-        return;
-      }
-
-      // 函数调用 → 展示确认卡片
-      if (msg.tool_calls?.length) {
-        for (const tc of msg.tool_calls) {
-          if (tc.function.name === 'create_events') {
-            let args: { events?: Array<{ date: string; time?: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: string }>; message?: string };
-            try { args = JSON.parse(tc.function.arguments); } catch { continue; }
-            if (args.events?.length) {
-              const cards = args.events.map(ev => ({
-                date: ev.date, time: ev.time || '', endTime: ev.endTime || '', title: ev.title,
-                location: ev.location || '', people: ev.people || '', note: ev.note || '',
-                type: (ev.type === 'task' ? 'task' : 'event') as 'event' | 'task',
-              }));
-              setChatMessages(prev => [...prev, {
-                role: 'assistant',
-                content: args.message || (msg.content || `已识别 ${cards.length} 条，请确认：`),
-                cards,
-              }]);
-            }
-          }
-        }
-        setChatLoading(false);
-        return;
-      }
-
-      // 纯文本回复
-      const text = msg.content || '';
-      setChatMessages(prev => [...prev, { role: 'assistant', content: text || 'API 返回为空。' }]);
-    } catch (e: unknown) {
-      const errMsg = (e as Error)?.name === 'AbortError' ? '请求超时（60秒），请重试' : '出错了，请检查AI设置中的Key是否正确。';
-      setChatMessages(prev => [...prev, { role: 'assistant', content: errMsg }]);
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
-  const confirmAiCards = (cards: { date: string; time: string; endTime?: string; title: string; location?: string; people?: string; note?: string; type: 'event' | 'task' }[]) => {
-    const newEvents = cards.map(card => ({
-      id: crypto.randomUUID(), title: card.title, date: card.date, time: card.time,
-      endTime: card.endTime || '', location: card.location || '', people: card.people || '', raw: card.note || card.title, updatedAt: Date.now(), type: card.type, completed: false,
-    }));
-
-    setEvents(prev => [...prev, ...newEvents]);
-    if (isOnline && token) newEvents.forEach(ev => pushToCloud(ev, 'POST'));
-
-    setChatMessages(prev => prev.filter(m => !m.cards?.length));
-    if (cards[0]) setDetailDate(cards[0].date);
-  };
-
   // ==================== 日历渲染 ====================
-
-  const renderCalendar = () => {
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
-    const firstDay = (new Date(year, month, 1).getDay() + 6) % 7;
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const daysInPrevMonth = new Date(year, month, 0).getDate();
-    const days: React.ReactNode[] = [];
-
-    for (let i = firstDay - 1; i >= 0; i--) {
-      days.push(<div key={`pv-${i}`} className="text-[#C0BDB8] text-center py-3 text-lg">{daysInPrevMonth - i}</div>);
-    }
-
-    const today = new Date();
-    for (let i = 1; i <= daysInMonth; i++) {
-      const d = new Date(year, month, i);
-      const ds = formatLocalDate(d);
-      const has = isOnline && events.some(e => e.date === ds);
-      const active = formatLocalDate(selectedDate) === ds;
-      const isToday = formatLocalDate(today) === ds;
-
-      days.push(
-        <button key={i} onClick={() => { setSelectedDate(d); setDetailDate(ds); }}
-          className={`relative py-3 text-lg font-medium rounded-xl transition-all duration-200
-            ${active ? 'bg-[#ED6A3B] text-white font-bold shadow-lg scale-105' : 'hover:bg-[#F3F1ED] text-[#1C1C1C]'}
-            ${isToday && !active ? 'border-2 border-[#ED6A3B] text-[#ED6A3B] font-bold bg-[#FFF5F0]' : ''}`}
-          aria-label={`${month + 1}月${i}日`}>
-          {i}
-          {has && <span className={`absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${active ? 'bg-white' : 'bg-red-400'}`} />}
-        </button>
-      );
-    }
-    return days;
-  };
 
   const dayEvents = (detailDate && isOnline)
     ? events.filter(e => e.date === detailDate && e.type !== 'task').sort((a, b) => a.time.localeCompare(b.time))
@@ -949,12 +617,13 @@ export default function Home() {
         .sort((a, b) => (a.completed ? 1 : 0) - (b.completed ? 1 : 0) || b.updatedAt - a.updatedAt)
     : [];
 
-  const weekDays = ['一', '二', '三', '四', '五', '六', '日'];
 
   // ==================== UI ====================
 
   return (
-    <main className="min-h-screen pb-16 flex flex-col">
+    <main className="min-h-screen pb-16 flex flex-col bg-[#F7F5F2]/90">
+      {/* 内容区实底：背景图只在最外圈露出，内容区不透明 ——
+          隐私视觉要的是「隔着一层看不清楚」，不是「看得出背后有张图」 */}
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>
@@ -963,17 +632,17 @@ export default function Home() {
               <img src="/icon-192x192.png" alt="" className="w-8 h-8 rounded-lg" />
               <div>
                 <h2 className="text-lg font-bold text-[#1C1C1C] leading-tight">菠萝日程</h2>
-                <span className="text-xs font-semibold text-[#ED6A3B]">v2.0</span>
+                <span className="text-xs font-semibold text-[#ED6A3B]">v4.0</span>
               </div>
             </div>
 
             <div className="space-y-3 mb-6 text-xs text-[#5C5C5C]">
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">AI 助理</span><span className="text-[#A0A0A0]">右下角点 💬 对话创建/查询日程 · 支持 DeepSeek 等</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">每日任务</span><span className="text-[#A0A0A0]">无时间的待办自动归为任务 · 完成后划线保留</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">文件导入</span><span className="text-[#A0A0A0]">📎 上传或拖入 CSV/Excel/PDF · 预览后确认</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱激活 · 30 秒自动同步</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">说话就记</span><span className="text-[#A0A0A0]">点麦克风说一句，它自己变成日程</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">一周一屏</span><span className="text-[#A0A0A0]">上面是这周的安排，下面是这周做了什么</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">文件导入</span><span className="text-[#A0A0A0]">📎 上传课表 CSV/Excel · 预览后确认</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱激活 · 顶栏常驻同步状态</span></div>
               <div className="flex gap-2.5"><span className="text-sm shrink-0">苹果日历</span><span className="text-[#A0A0A0]">扫码订阅 · 15 分钟自动刷新</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">安全防护</span><span className="text-[#A0A0A0]">CORS 白名单 · 限流 · CSP · JWT 短期</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">你的数据</span><span className="text-[#A0A0A0]">各自独立，互不可见</span></div>
             </div>
 
             <button onClick={dismissVersionModal}
@@ -1036,10 +705,7 @@ export default function Home() {
               className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="模板下载" title="CSV模板下载">
               <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1" strokeWidth={2}/><path d="M3 5h18M8 5v16M3 10h18" strokeWidth={2}/></svg>
             </button>
-            <button onClick={() => setShowAiSettings(true)}
-              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="AI设置" title="AI 连接设置">
-              <span className="text-base">⚙</span>
-            </button>
+            {/* v4.0：AI 设置面板已删除 —— 用户不该为系统内部机制操心 */}
             <button onClick={() => setShowFeedback(true)}
               className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="反馈" title="反馈建议">
               <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" /></svg>
@@ -1177,7 +843,7 @@ export default function Home() {
             <div className="space-y-5">
               <div>
                 <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">快速记录</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">直接输入自然语言，如「<span className="text-[#ED6A3B]">后天下午3点买菜</span>」「<span className="text-[#ED6A3B]">本周五上午10点开会</span>」，回车即保存。日期、时间自动识别。<br /><span className="text-xs text-[#A0A0A0]">支持换行分隔，一次输入多个日程</span></p>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">直接输入自然语言，如「<span className="text-[#ED6A3B]">后天下午3点买菜</span>」「<span className="text-[#ED6A3B]">上周五组会</span>」，回车即保存。日期、时间自动识别。<br /><span className="text-xs text-[#A0A0A0]">认不出来时会标一个「待确认」，点一下改掉就行</span></p>
               </div>
 
               <div>
@@ -1187,7 +853,7 @@ export default function Home() {
 
               <div>
                 <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">语音输入</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">按住麦克风按钮说话，松手后文字自动填入输入框。确认无误点发送保存。<br /><span className="text-xs text-[#A0A0A0]">Chrome / Edge 浏览器可用，iPhone 用键盘自带听写</span></p>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">点一下麦克风开始说，再点一下结束。说完直接落库，不用二次确认。一口气说两件事，会自动记成两条。<br /><span className="text-xs text-[#A0A0A0]">微信里、Firefox 里都能用 —— 走的是服务端转写，不依赖浏览器</span></p>
               </div>
 
               <div>
@@ -1238,12 +904,7 @@ export default function Home() {
                         <input type="time" value={e.time} onChange={ev => {
                           const next = [...importPreview]; next[i] = { ...next[i], time: ev.target.value }; setImportPreview(next);
                         }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-24" />
-                        <select value={e.type} onChange={ev => {
-                          const next = [...importPreview]; next[i] = { ...next[i], type: ev.target.value as 'event' | 'task', time: ev.target.value === 'task' ? '' : next[i].time }; setImportPreview(next);
-                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none">
-                          <option value="event">日程</option>
-                          <option value="task">任务</option>
-                        </select>
+                        {/* v4.0：类型由系统按有无时间判断，不让用户选 */}
                         <span className="text-xs text-[#A0A0A0] truncate flex-1">{e.raw}</span>
                       </div>
                     </div>
@@ -1335,6 +996,24 @@ export default function Home() {
                             <label className="text-xs text-[#A0A0A0] mb-1 block">事项</label>
                             <input type="text" value={editForm.title} onChange={ev => setEditForm({ ...editForm, title: ev.target.value })}
                               className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
+                            {/* 原话：只在编辑时展开，平时不占地方 */}
+                            {events.find(e => e.id === editingEventId)?.raw && (
+                              <p className="text-xs text-[#A0A0A0] mt-1.5 leading-relaxed">
+                                原话：{events.find(e => e.id === editingEventId)?.raw}
+                              </p>
+                            )}
+                            {/* 原话：只在编辑时展开，平时不占地方 */}
+                            {events.find(e => e.id === editingEventId)?.raw && (
+                              <p className="text-xs text-[#A0A0A0] mt-1.5 leading-relaxed">
+                                原话：{events.find(e => e.id === editingEventId)?.raw}
+                              </p>
+                            )}
+                            {/* 原话：只在编辑时展开，平时不占地方 */}
+                            {events.find(e => e.id === editingEventId)?.raw && (
+                              <p className="text-xs text-[#A0A0A0] mt-1.5 leading-relaxed">
+                                原话：{events.find(e => e.id === editingEventId)?.raw}
+                              </p>
+                            )}
                           </div>
                           <div>
                             <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
@@ -1375,8 +1054,16 @@ export default function Home() {
                         <div className="flex items-center gap-3">
                           <span className="bg-[#ED6A3B] text-white text-sm px-3 py-1.5 rounded-lg font-mono font-semibold min-w-[60px] text-center">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>
                           <div className="flex-1 min-w-0">
-                            <div className="font-medium text-[#1C1C1C] truncate">{e.title}</div>
-                            <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">{e.raw}</div>
+                            <div className="flex items-center gap-1.5">
+                              <div className="font-medium text-[#1C1C1C] truncate">{e.title}</div>
+                              {e.dateConfirmed === 0 && (
+                                <button onClick={() => startEdit(e)}
+                                  className="shrink-0 text-[10px] text-[#ED6A3B] bg-[#FFF5F0] hover:bg-[#FFE8DC] rounded px-1.5 py-0.5 transition-colors"
+                                  title="日期没认出来，改一下">
+                                  待确认
+                                </button>
+                              )}
+                            </div>
                             {(e.location || e.people) && <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">{e.location}{e.location && e.people ? ' · ' : ''}{e.people}</div>}
                           </div>
                           <div className="flex gap-1">
@@ -1451,8 +1138,16 @@ export default function Home() {
                             )}
                           </button>
                           <div className="flex-1 min-w-0">
-                            <div className={`font-medium truncate ${e.completed ? 'line-through text-[#A0A0A0]' : 'text-[#1C1C1C]'}`}>{e.title}</div>
-                            {e.raw && <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>{e.raw}</div>}
+                            <div className="flex items-center gap-1.5">
+                              <div className={`font-medium truncate ${e.completed ? 'line-through text-[#A0A0A0]' : 'text-[#1C1C1C]'}`}>{e.title}</div>
+                              {e.dateConfirmed === 0 && (
+                                <button onClick={() => startEdit(e)}
+                                  className="shrink-0 text-[10px] text-[#ED6A3B] bg-[#FFF5F0] hover:bg-[#FFE8DC] rounded px-1.5 py-0.5 transition-colors"
+                                  title="日期没认出来，改一下">
+                                  待确认
+                                </button>
+                              )}
+                            </div>
                             {(e.location || e.people) && <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>{e.location}{e.location && e.people ? ' · ' : ''}{e.people}</div>}
                           </div>
                           <div className="flex gap-1">
@@ -1474,224 +1169,57 @@ export default function Home() {
         </div>
       )}
 
-      {/* Calendar */}
-      <div className={`bg-white/50 backdrop-blur-md rounded-2xl p-5 shadow-sm border border-[#E8E4DF] overflow-y-auto ${detailDate ? 'md:w-3/4' : 'md:w-full'}`}>
-        <div className="flex justify-between items-center mb-5">
-          <h2 className="text-lg font-bold text-[#1C1C1C]">
-            {currentDate.getFullYear()}年{currentDate.getMonth() + 1}月
-          </h2>
-          <div className="flex gap-2">
-            <button onClick={() => setCurrentDate(d => new Date(d.getFullYear(), d.getMonth() - 1))}
-              className="w-9 h-9 bg-[#F3F1ED] hover:bg-[#E8E4DF] rounded-full text-[#5C5C5C] flex items-center justify-center transition-colors" aria-label="上个月">
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <button onClick={() => setCurrentDate(d => new Date(d.getFullYear(), d.getMonth() + 1))}
-              className="w-9 h-9 bg-[#F3F1ED] hover:bg-[#E8E4DF] rounded-full text-[#5C5C5C] flex items-center justify-center transition-colors" aria-label="下个月">
-              <ChevronRight className="w-5 h-5" />
+      {/* 周视图 —— 一屏两区：上面七天时间轴，下面本周流水 */}
+      <div className="flex-1 flex flex-col min-h-0">
+        {/* 周切换 */}
+        <div className="flex justify-between items-center mb-3 px-1">
+          <button onClick={() => setWeekAnchor(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() - 7))}
+            className="w-9 h-9 bg-white/70 hover:bg-white rounded-full text-[#5C5C5C] flex items-center justify-center transition-colors" aria-label="上一周">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <div className="text-center">
+            <h2 className="text-sm font-semibold text-[#1C1C1C]">
+              {weekDates(weekAnchor)[0]} ~ {weekDates(weekAnchor)[6]}
+            </h2>
+            <button onClick={() => setWeekAnchor(new Date())}
+              className="text-xs text-[#ED6A3B] hover:underline">
+              回到本周
             </button>
           </div>
+          <button onClick={() => setWeekAnchor(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7))}
+            className="w-9 h-9 bg-white/70 hover:bg-white rounded-full text-[#5C5C5C] flex items-center justify-center transition-colors" aria-label="下一周">
+            <ChevronRight className="w-5 h-5" />
+          </button>
         </div>
 
-        <div className="grid grid-cols-7 gap-1 mb-3">
-          {weekDays.map(d => <div key={d} className="text-center text-xs text-[#A0A0A0] py-2 font-medium">{d}</div>)}
-        </div>
-
-        <div className="grid grid-cols-7 gap-1">
-          {renderCalendar()}
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <WeekView
+            anchor={weekAnchor}
+            events={events.map(e => ({
+              id: e.id, title: e.title, date: e.date, time: e.time,
+              endTime: e.endTime, location: e.location, people: e.people,
+            }))}
+            today={new Date()}
+            narrowDate={detailDate || weekToDateString(new Date())}
+            isNarrow={isNarrow}
+            onEventClick={(e) => {
+              const full = events.find(x => x.id === e.id);
+              if (full) { setDetailDate(full.date); setEditingEventId(full.id); }
+            }}
+          />
         </div>
       </div>
 
       </div>
 
-      {/* 浮动切换按钮 */}
-      {!showChat && (
-        <button onClick={() => setShowChat(true)}
-          className="fixed bottom-28 right-4 z-50 w-14 h-14 bg-[#1C1C1C] text-white rounded-2xl shadow-lg hover:bg-[#333] transition-all flex items-center justify-center">
-          <MessageCircle className="w-6 h-6" />
-        </button>
-      )}
-
-      {/* AI 对话框 */}
-      {showChat && (
-        <div className="fixed inset-x-0 bottom-0 z-50 flex flex-col" style={{ height: '66vh' }}>
-          {/* 日历遮罩（点击关闭） */}
-          <div className="absolute inset-0 -z-10" onClick={() => setShowChat(false)} />
-
-          <div className="flex-1 flex flex-col bg-white rounded-t-2xl shadow-[0_-10px_40px_rgba(0,0,0,0.15)] animate-slide-up min-h-0">
-            {/* 对话框 Header */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-[#E8E4DF] shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-sm text-[#1C1C1C]">AI 助理</span>
-                {user?.role === 'family' ? (
-                  <span className="text-xs text-[#A0A0A0]">小菠萝 · 智能助理</span>
-                ) : aiConfig.key ? (
-                  <span className="text-xs text-[#A0A0A0]">{AI_BRANDS[aiConfig.brand]?.name} · {aiConfig.model}</span>
-                ) : (
-                  <span className="text-xs text-red-400">未设置 API Key</span>
-                )}
-              </div>
-              <div className="flex items-center gap-1">
-                {user?.role !== 'family' && aiConfig.key && (
-                  <a href={AI_BRANDS[aiConfig.brand]?.billing || '#'} target="_blank" rel="noopener"
-                    className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center text-xs" title="查看费用明细">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" strokeWidth={2}/><path d="M12 9v4M12 17h.01" strokeWidth={2.5} strokeLinecap="round"/></svg>
-                  </a>
-                )}
-                <button onClick={() => setShowChat(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center"><X className="w-4 h-4" /></button>
-              </div>
-            </div>
-
-            {/* 消息区 */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
-              {chatMessages.length === 0 && (
-                <p className="text-[#A0A0A0] text-sm text-center py-8">和菠萝聊聊你的日程吧</p>
-              )}
-              {chatMessages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
-                    m.role === 'user' ? 'bg-[#ED6A3B] text-white' : 'bg-[#F3F1ED] text-[#1C1C1C]'
-                  }`}>
-                    <p className="whitespace-pre-wrap">{m.content}</p>
-                    {m.cards && m.cards.length > 0 && (
-                      <div className="mt-2 space-y-2">
-                        {m.cards.map((card, ci) => (
-                          <div key={ci} className="p-2.5 bg-white rounded-xl border border-[#E8E4DF]">
-                            <div className="text-xs text-[#5C5C5C] space-y-0.5 mb-2">
-                              <div>{card.date} {card.time || '全天'}{card.endTime ? `-${card.endTime}` : ''}</div>
-                              <div className="font-medium text-[#1C1C1C]">{card.title}</div>
-                              {(card.location || card.people) && <div className="text-[#A0A0A0]">{card.location}{card.location && card.people ? ' · ' : ''}{card.people}</div>}
-                              {card.note && <div className="text-[#A0A0A0] text-[11px]">{card.note}</div>}
-                              <div className="text-[#A0A0A0]">{card.type === 'task' ? '任务' : '日程'}</div>
-                            </div>
-                            <div className="flex gap-2">
-                              <button onClick={() => setChatMessages(prev => {
-                                const msg = prev[i];
-                                if (!msg?.cards || msg.cards.length <= 1) return prev.filter((_, j) => j !== i);
-                                return prev.map((m, j) => j === i ? { ...m, cards: m.cards!.filter((_, k) => k !== ci) } : m);
-                              })}
-                                className="flex-1 h-8 text-xs border border-[#E8E4DF] rounded-lg hover:bg-[#F3F1ED]">取消</button>
-                              <button onClick={() => confirmAiCards([card])}
-                                className="flex-1 h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E]">确认添加</button>
-                            </div>
-                          </div>
-                        ))}
-                        {m.cards.length > 1 && (
-                          <button onClick={() => confirmAiCards(m.cards!)}
-                            className="w-full h-8 text-xs bg-[#ED6A3B] text-white rounded-lg hover:bg-[#D45D2E] font-medium">全部确认（{m.cards.length}条）</button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {chatLoading && (
-                <div className="flex justify-start">
-                  <div className="bg-[#F3F1ED] rounded-2xl px-4 py-2.5">
-                    <div className="flex gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-[#D9D4CF] animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-[#D9D4CF] animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-[#D9D4CF] animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 输入区 */}
-            <div className="px-4 py-3 border-t border-[#E8E4DF] shrink-0">
-              <div className="flex items-center gap-2 bg-[#F3F1ED] p-1.5 rounded-2xl">
-                {/* 语音 */}
-                <button onClick={toggleRecording}
-                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all ${
-                    isRecording ? 'bg-red-500 text-white animate-pulse' : 'hover:bg-[#E8E4DF] text-[#5C5C5C]'
-                  }`}>
-                  <Mic className="w-5 h-5" />
-                </button>
-                <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && sendChat()}
-                  placeholder="和菠萝聊聊日程..." disabled={user?.role !== 'family' && !aiConfig.key}
-                  className="flex-1 bg-transparent px-2 py-2.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#A0A0A0] disabled:opacity-40" />
-                <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading || (user?.role !== 'family' && !aiConfig.key)}
-                  className="w-10 h-10 bg-[#ED6A3B] hover:bg-[#D45D2E] disabled:opacity-40 rounded-xl text-white flex items-center justify-center shrink-0 transition-all">
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* AI 设置弹窗 */}
-      {showAiSettings && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={() => setShowAiSettings(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-5">
-              <h2 className="font-semibold text-[#1C1C1C]">AI 连接设置</h2>
-              <button onClick={() => setShowAiSettings(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center">&times;</button>
-            </div>
-
-            {user?.role === 'family' ? (
-              <div className="p-5 bg-[#F7F5F2] rounded-xl text-center space-y-2 mb-4">
-                <div className="text-3xl">🤖</div>
-                <div className="font-semibold text-[#1C1C1C]">小菠萝</div>
-                <div className="text-xs text-[#A0A0A0]">由 Coze 驱动的智能日程助手</div>
-                <div className="text-xs text-[#5C5C5C] bg-white rounded-lg py-2 px-3">✅ 服务已激活 · 费用由管理员统一承担，无需配置</div>
-              </div>
-            ) : (
-              <>
-                {/* 品牌选择（卡片式） */}
-                <label className="text-xs text-[#A0A0A0] mb-2 block">选择品牌</label>
-                <div className="space-y-1.5 mb-4">
-                  {Object.entries(AI_BRANDS).map(([k, b]) => (
-                    <button key={k} onClick={() => { const m = b.models[0]?.id || ''; const c = { ...aiConfig, brand: k, model: m }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
-                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
-                        aiConfig.brand === k ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
-                      }`}>
-                      <div className="text-left">
-                        <div className="text-sm font-medium text-[#1C1C1C]">{b.name}</div>
-                        <div className="text-xs text-[#A0A0A0] mt-0.5">{b.models.map(m => m.label).join(' / ')} · {b.models[0]?.price}</div>
-                      </div>
-                      <a href={b.platform} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                        className="text-xs text-[#A0A0A0] hover:text-[#ED6A3B] underline shrink-0 ml-2">官网</a>
-                    </button>
-                  ))}
-                </div>
-
-                {/* 模型选择 */}
-                <label className="text-xs text-[#A0A0A0] mb-2 block">模型版本</label>
-                <div className="space-y-1.5 mb-4">
-                  {(AI_BRANDS[aiConfig.brand]?.models || []).map(m => (
-                    <button key={m.id} onClick={() => { const c = { ...aiConfig, model: m.id }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
-                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors ${
-                        aiConfig.model === m.id ? 'border-[#ED6A3B] bg-[#FFF5F0]' : 'border-[#E8E4DF] hover:bg-[#F7F5F2]'
-                      }`}>
-                      <div className="text-left">
-                        <div className="text-sm font-medium text-[#1C1C1C]">{m.label}</div>
-                        <div className="text-xs text-[#A0A0A0]">{m.id}</div>
-                      </div>
-                      <span className="text-xs text-[#5C5C5C]">{m.price}</span>
-                    </button>
-                  ))}
-                </div>
-
-                {/* API Key */}
-                <label className="text-xs text-[#A0A0A0] mb-2 block">API Key</label>
-                <div className="flex gap-2 mb-4">
-                  <input type="password" value={aiConfig.key} onChange={e => { const c = { ...aiConfig, key: e.target.value }; setAiConfig(c); localStorage.setItem('schedule_ai_config', JSON.stringify(c)); }}
-                    placeholder="sk-..." className="flex-1 px-3 py-2.5 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                  <a href={AI_BRANDS[aiConfig.brand]?.billing || '#'} target="_blank" rel="noopener"
-                    className="shrink-0 h-10 px-3 rounded-lg border border-[#E8E4DF] text-xs text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center gap-1">
-                    费用明细 ↗
-                  </a>
-                </div>
-              </>
-            )}
-
-            <button onClick={() => setShowAiSettings(false)}
-              className="w-full h-11 bg-[#1C1C1C] text-white rounded-lg text-sm font-semibold hover:bg-[#333] transition-colors">完成</button>
-          </div>
-        </div>
-      )}
+      {/* 输入区 —— 唯一输入入口：麦克风 + 文本框 + 同步状态 */}
+      <InputArea
+        apiBase={API_BASE}
+        token={token}
+        onSubmit={handleParsed}
+        syncState={isSyncing ? 'syncing' : offline ? 'offline' : 'synced'}
+        isNarrow={isNarrow}
+      />
     </main>
   );
 }
