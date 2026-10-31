@@ -43,3 +43,9 @@ next-env.d.ts
 neo-brutalist-landing.html
 skills-lock.json
 dist/
+
+# Cloudflare Workers 本地状态（miniflare 的 D1 落盘文件与临时目录）
+workers-api/.wrangler/
+
+# 依赖目录（根目录的 /node_modules 只匹配顶层，workers-api 下需单独声明）
+workers-api/node_modules/
