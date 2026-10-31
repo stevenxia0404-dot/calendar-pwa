@@ -2,11 +2,14 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Send, ChevronLeft, ChevronRight, Download, Upload, LogOut, RefreshCw, Mail, MessageCircle, X, Mic } from 'lucide-react';
-import { read, utils } from 'xlsx';
 
 // ==================== 配置 ====================
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://schedule-api.boluomate.com';
+
+// 导入文件大小上限。课表正常在几百 KB 以内，5MB 足够，
+// 同时能挡住构造出来的超大文件把浏览器内存拖垮。
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 
 const COZE_CONFIG = {
   botId: '7669756491917721651',
@@ -32,6 +35,27 @@ function parseCsvLine(line: string): string[] {
   }
   cells.push(cur.trim());
   return cells;
+}
+
+// 单元格值转文本。
+// Excel 里的「真日期」是日期序列号，解析出来是 Date 对象，
+// 直接 String() 会得到 "Mon Nov 02 2026 ..." 这种乱码，导入必失败。
+function cellToText(c: unknown): string {
+  if (c === null || c === undefined) return '';
+  if (c instanceof Date) {
+    // 用 UTC 分量还原：Excel 日期序列号本身不带时区，解析库按 UTC 解释，
+    // 若用本地分量，在负时区会把纯日期偏成前一天。
+    const y = c.getUTCFullYear();
+    const m = String(c.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(c.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  if (typeof c === 'string') {
+    // 兜底：某些解析配置下日期会直接给 ISO 字符串
+    const iso = c.match(/^(\d{4}-\d{2}-\d{2})T/);
+    if (iso) return iso[1];
+  }
+  return String(c);
 }
 
 function extractTime(text: string) {
@@ -425,19 +449,25 @@ export default function Home() {
   const parseImportFile = async (file: File) => {
     try {
       const ext = file.name.split('.').pop()?.toLowerCase();
+
+      if (file.size > MAX_IMPORT_FILE_BYTES) {
+        alert(`文件太大（${(file.size / 1024 / 1024).toFixed(1)}MB），请拆分后再导入`);
+        return;
+      }
+
       if (ext === 'csv') {
         setImportText(await file.text());
-      } else if (ext === 'xlsx' || ext === 'xls') {
-        const buf = await file.arrayBuffer();
-        const wb = read(buf, { type: 'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
+      } else if (ext === 'xlsx' || ext === 'xlsm') {
+        // 动态引入：解析库只在真的要导入时才下载，不占首屏。
+        // universal 版不走 Web Worker，避免打包时的 worker chunk 问题。
+        const { readSheet } = await import('read-excel-file/universal');
+        const rows = (await readSheet(file)) as unknown[][];
 
         // 智能检测表头映射到模板格式：日期,开始时间,结束时间,事项,地点,人员,备注
         let header: string[] | null = null;
         let dataRows = rows;
         if (rows[0] && rows[0].some(c => String(c).includes('日期') || String(c).includes('时间') || String(c).includes('事项') || String(c).includes('内容'))) {
-          header = rows[0].map(c => String(c));
+          header = rows[0].map(c => cellToText(c));
           dataRows = rows.slice(1);
         }
 
@@ -455,7 +485,7 @@ export default function Home() {
 
         const csvLines = ['日期,开始时间,结束时间,事项,地点,人员,备注'];
         for (const r of dataRows) {
-          const s = r.map(c => String(c ?? '').trim());
+          const s = r.map(c => cellToText(c).trim());
           if (s.every(c => !c)) continue;
           const date = idxD >= 0 ? s[idxD] : s[0] || '';
           const time = idxT >= 0 ? s[idxT] : s[1] || '';
