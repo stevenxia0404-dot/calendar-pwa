@@ -1,7 +1,10 @@
 // 菠萝日程 - Cloudflare Workers API v0.4.1
 // 邮箱验证码认证 + JWT + D1 数据库
 
-// 白名单邮箱 — Coze Bot 模式（开发者付费），其余走直调（用户自付）
+// 家人账号标识。
+// v3 时用它决定走哪条 AI 链路（Coze 免费用 / 用户自付），
+// v4.0 移除 AI 后这个区分不再影响任何行为，仅作为账号来源标记保留。
+// 前端目前不读 role —— 保留是为了不改动登录接口的返回结构。
 const FAMILY_EMAILS = ['417118098@qq.com'];
 
 // 墓碑回收的上次执行时刻（模块级，实例内共享）。
@@ -71,6 +74,15 @@ async function verifyJWT(token, secret) {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
 
+    // 显式校验算法。
+    // 下面用 crypto.subtle.verify('HMAC') 已经限定了算法，
+    // alg=none 之类的伪造本来就过不去；这一行是防止将来有人
+    // 改成「先读 header.alg 再决定怎么验」，把选择权交给攻击者。
+    const header = JSON.parse(new TextDecoder().decode(
+      new Uint8Array([...base64urlDecode(parts[0])].map(c => c.charCodeAt(0)))
+    ));
+    if (header.alg !== 'HS256') return null;
+
     const encoder = new TextEncoder();
     const data = encoder.encode(`${parts[0]}.${parts[1]}`);
     const sig = new Uint8Array([...base64urlDecode(parts[2])].map(c => c.charCodeAt(0)));
@@ -107,6 +119,9 @@ function corsHeaders(origin) {
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     'Access-Control-Allow-Origin': allowed,
+    // Vary 让缓存按 Origin 分开存。没有它，中间缓存可能把一个来源的
+    // 响应（带着那个来源的 Allow-Origin）返回给另一个来源。
+    'Vary': 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
@@ -120,22 +135,53 @@ function json(data, status = 200, extraHeaders = {}) {
   });
 }
 
+// 常量时间字符串比较，用于校验管理密钥。
+// 普通 !== 会在第一个不同字符处立即返回，攻击者能靠响应时间差
+// 逐位猜出密钥。这里把整串都比一遍，耗时与内容无关。
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 // ==================== 限流 ====================
 
 const RATE_LIMIT_WINDOW = 60 * 1000; // 1 分钟窗口
 const RATE_LIMIT_MAX = 60;           // 每个 IP 每分钟最多 60 次
 
-async function checkRateLimit(env, ip) {
+// 限流表清理的上次执行时刻（模块级，实例内共享）。
+// 限流表每请求写一行，不清会无限膨胀 —— 表越大 COUNT 越慢，
+// 最终反过来拖垮所有请求。每小时清一次过期行就够。
+let lastRateLimitSweep = 0;
+const RATE_LIMIT_SWEEP_INTERVAL = 3600_000;
+
+async function sweepRateLimits(env, now) {
+  if (now - lastRateLimitSweep < RATE_LIMIT_SWEEP_INTERVAL) return;
+  lastRateLimitSweep = now;
+  try {
+    // 只需要保留最近一个窗口内的记录，更早的对计数没有意义
+    await env.DB.prepare('DELETE FROM rate_limits WHERE timestamp < ?')
+      .bind(now - RATE_LIMIT_WINDOW * 2).run();
+  } catch (e) {
+    // 清理失败不能挡住正常请求 —— 下个小时再试
+    console.error('限流表清理失败:', e && e.message);
+  }
+}
+
+async function checkRateLimit(env, ip, max = RATE_LIMIT_MAX) {
   const key = `rl:${ip}`;
   const now = Date.now();
   const windowStart = now - RATE_LIMIT_WINDOW;
 
-  // 清理过期记录 + 计数
+  await sweepRateLimits(env, now);
+
   const { results } = await env.DB.prepare(
     'SELECT COUNT(*) as cnt FROM rate_limits WHERE ip = ? AND timestamp > ?'
   ).bind(key, windowStart).all();
 
-  if (results[0]?.cnt >= RATE_LIMIT_MAX) return false;
+  if (results[0]?.cnt >= max) return false;
 
   await env.DB.prepare(
     'INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?)'
@@ -144,8 +190,16 @@ async function checkRateLimit(env, ip) {
   return true;
 }
 
+// 验证码生成。
+// 必须用密码学随机：Math.random() 是可预测的伪随机序列，
+// 攻击者若能观察到若干次输出，就能推断后续验证码。
+// crypto.getRandomValues 在 Workers 里始终可用。
 function generateCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  // 取模会引入极轻微的偏斜，但 2^32 % 900000 只差几十，
+  // 对 6 位验证码的猜测难度没有实际影响。
+  return String(100000 + (buf[0] % 900000));
 }
 
 // HTML 转义。所有拼进 HTML 的用户输入都必须过这里。
@@ -183,6 +237,89 @@ async function sendEmail(to, subject, body, env) {
   return { ok: false, status: resp.status, error: respText };
 }
 
+// ==================== 日程字段校验 ====================
+//
+// 为什么服务端也要校验：前端有 TypeScript，但 API 是公开的 ——
+// 拿到 token 就能直接 curl。不校验的后果是脏数据入库，
+// 而脏数据的杀伤力比错误响应大得多：
+//   date = "abc"        → 周视图算日期得到 Invalid Date，整屏渲染崩
+//   title = 10MB 字符串 → 列表渲染卡死，同步体积暴涨
+//   time = "25:99"      → 时间轴定位错乱
+// 所以宁可在入口拦住，也不要让它进库。
+
+const EVENT_LIMITS = {
+  title: 200,
+  location: 100,
+  people: 100,
+  raw: 1000,
+};
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// 是否真实存在的日期（挡掉 2026-02-30 这种）
+function isValidDateString(s) {
+  if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+// 取字符串并截断。长度超限采取「截断」而不是「拒绝」：
+// 少几个字总比整条记录写不进去好，且不会让同步队列卡住。
+function clampStr(v, max) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+/**
+ * 校验并规整一条日程的字段。
+ * @returns {{ ok: true, value: object } | { ok: false, error: string }}
+ */
+function normalizeEvent(body) {
+  if (!body || typeof body !== 'object') {
+    return { ok: false, error: '请求体格式错误' };
+  }
+
+  const title = clampStr(body.title, EVENT_LIMITS.title).trim();
+  if (!title) return { ok: false, error: '缺少事项内容' };
+
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  if (!date) return { ok: false, error: '缺少日期' };
+  if (!isValidDateString(date)) {
+    return { ok: false, error: '日期格式不正确，应为 YYYY-MM-DD' };
+  }
+
+  const time = typeof body.time === 'string' ? body.time.trim() : '';
+  if (time && !TIME_RE.test(time)) {
+    return { ok: false, error: '开始时间格式不正确，应为 HH:MM' };
+  }
+
+  const endTime = typeof body.endTime === 'string' ? body.endTime.trim() : '';
+  if (endTime && !TIME_RE.test(endTime)) {
+    return { ok: false, error: '结束时间格式不正确，应为 HH:MM' };
+  }
+
+  const type = body.type === 'task' ? 'task' : 'event';
+
+  return {
+    ok: true,
+    value: {
+      title,
+      date,
+      time,
+      endTime,
+      location: clampStr(body.location, EVENT_LIMITS.location).trim(),
+      people: clampStr(body.people, EVENT_LIMITS.people).trim(),
+      raw: clampStr(body.raw, EVENT_LIMITS.raw),
+      type,
+      completed: body.completed ? 1 : 0,
+      dateConfirmed: body.dateConfirmed === 0 ? 0 : 1,
+    },
+  };
+}
+
 // ==================== 认证中间件 ====================
 
 async function requireAuth(request, env) {
@@ -205,8 +342,10 @@ export default {
       return new Response(null, { status: 204, headers });
     }
 
-    // 限流检查（跳过 OPTIONS 和管理页面）
-    if (path !== '/' && path !== '/feedback') {
+    // 限流：所有路径都走，包括管理页面和反馈。
+    // 管理页原来被跳过，等于给暴力破解开了无限次尝试的口子。
+    if (path !== '/') {
+      // 管理页走单独的更严格配额，见下方
       const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
       if (!(await checkRateLimit(env, ip))) {
         return json({ error: '请求太频繁，请稍后再试' }, 429, headers);
@@ -214,9 +353,28 @@ export default {
     }
 
     // 管理页面：查看反馈
+    // 密钥从 env.ADMIN_KEY 读取，不再硬编码在仓库里 ——
+    // 硬编码的密码会随代码一起泄露，且改密码要重新部署。
+    // 未配置时拒绝服务（fail closed），而不是退回某个默认值。
     if (path === '/' && method === 'GET') {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      // 管理页单独配额：每分钟 10 次，远低于普通接口，
+      // 让暴力破解在实际时间里不可行
+      if (!(await checkRateLimit(env, `admin:${ip}`, 10))) {
+        return json({ error: '请求太频繁' }, 429, headers);
+      }
+
+      const expected = env.ADMIN_KEY;
+      if (!expected) {
+        return json({
+          error: '管理页面未启用：请先执行 `wrangler secret put ADMIN_KEY`',
+        }, 503, headers);
+      }
+
       const key = url.searchParams.get('key');
-      if (key !== 'boluomate2026') return json({ error: 'Unauthorized' }, 401, headers);
+      if (!safeEqual(key || '', expected)) {
+        return json({ error: 'Unauthorized' }, 401, headers);
+      }
 
       const { results } = await env.DB.prepare(
         'SELECT id, email, text, created_at FROM feedback ORDER BY created_at DESC LIMIT 100'
@@ -500,58 +658,14 @@ export default {
         }
       }
 
-      // Coze AI 代理（需登录）
-      if (path === '/ai/chat' && method === 'POST') {
-        const payload = await requireAuth(request, env);
-        if (!payload) return json({ error: '请先激活同步' }, 401, headers);
-
-        const body = await request.text();
-        const res = await fetch('https://api.coze.cn/v3/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${env.COZE_API_TOKEN}`,
-          },
-          body,
-        });
-
-        return new Response(res.body, {
-          status: res.status,
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            ...headers,
-          },
-        });
-      }
+      // 注：/ai/chat（Coze 代理）已删除。
+      // v4.0 移除了全部 AI 链路，前端不再调用它，但它当时仍留在服务端 ——
+      // 等于开了一个「任何登录用户都能拿它消耗 Coze 额度」的透传代理，
+      // 且 body 完全不受控。死代码不该有对外暴露的面。
 
       // iCalendar 订阅（无需登录，使用 cal_token 或 test 模式）
       if (path === '/events/ical' && method === 'GET') {
         const calToken = url.searchParams.get('token');
-
-        if (calToken === 'test') {
-          const testIcal = [
-            'BEGIN:VCALENDAR',
-            'VERSION:2.0',
-            'PRODID:-//菠萝日程//test//',
-            'CALSCALE:GREGORIAN',
-            'METHOD:PUBLISH',
-            'X-WR-CALNAME:菠萝日程测试',
-            'BEGIN:VEVENT',
-            'DTSTART:20260715T090000Z',
-            'DTEND:20260715T100000Z',
-            'SUMMARY:测试日程',
-            'DESCRIPTION:这是一个测试事件',
-            'UID:test-123',
-            'END:VEVENT',
-            'END:VCALENDAR',
-          ].join('\r\n');
-          return new Response(testIcal, {
-            status: 200,
-            headers: { 'Content-Type': 'text/calendar; charset=utf-8', ...headers },
-          });
-        }
 
         if (!calToken) return json({ error: 'Missing token' }, 401, headers);
 
@@ -566,6 +680,16 @@ export default {
         const { results: evts } = await env.DB.prepare(
           'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? AND deleted_at = 0 ORDER BY date, time'
         ).bind(row.user_id).all();
+
+        // iCal 文本转义。
+        // 反斜杠必须最先处理，否则后续替换产生的反斜杠会被二次转义。
+        // 换行尤其重要：标题里一个换行就能把后面的文本变成新的 iCal 属性，
+        // 等于往用户的日历里注入任意字段。
+        const icalEscape = (s) => String(s || '')
+          .replace(/\\/g, '\\\\')
+          .replace(/;/g, '\\;')
+          .replace(/,/g, '\\,')
+          .replace(/\r\n|\r|\n/g, '\\n');
 
         const toUTC = (d, t) => {
           const [h, m] = (t || '09:00').split(':');
@@ -601,9 +725,9 @@ export default {
               'BEGIN:VEVENT',
               `DTSTART;VALUE=DATE:${dateStr}`,
               `DTEND;VALUE=DATE:${allDayEnd(e.date)}`,
-              `SUMMARY:${prefix}${e.title.replace(/[,;\\]/g, '\\$&')}`,
-              `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
-              ...(e.location ? [`LOCATION:${e.location.replace(/[,;\\]/g, '\\$&')}`] : []),
+              `SUMMARY:${icalEscape(prefix + e.title)}`,
+              `DESCRIPTION:${icalEscape(e.raw || '')}`,
+              ...(e.location ? [`LOCATION:${icalEscape(e.location)}`] : []),
               `UID:${e.id}`,
               `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
               'END:VEVENT'
@@ -615,9 +739,9 @@ export default {
               'BEGIN:VEVENT',
               `DTSTART:${dt}`,
               `DTEND:${endDt}`,
-              `SUMMARY:${e.title.replace(/[,;\\]/g, '\\$&')}`,
-              `DESCRIPTION:${(e.raw || '').replace(/[,;\\]/g, '\\$&')}`,
-              ...(e.location ? [`LOCATION:${e.location.replace(/[,;\\]/g, '\\$&')}`] : []),
+              `SUMMARY:${icalEscape(e.title)}`,
+              `DESCRIPTION:${icalEscape(e.raw || '')}`,
+              ...(e.location ? [`LOCATION:${icalEscape(e.location)}`] : []),
               `UID:${e.id}`,
               `DTSTAMP:${new Date(e.updated_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
               'END:VEVENT'
@@ -631,7 +755,10 @@ export default {
           headers: {
             'Content-Type': 'text/calendar; charset=utf-8',
             'Content-Disposition': 'inline; filename="schedule.ics"',
-            'Cache-Control': 'public, max-age=900',
+            // 必须是 private：这份日历属于某个具体用户，
+            // public 会让中间缓存层（CDN、公司代理）有机会把它存下来
+            // 再返回给别人。订阅端是客户端自己拉，private 不影响刷新。
+            'Cache-Control': 'private, max-age=900',
             ...headers,
           },
         });
@@ -684,13 +811,13 @@ export default {
 
       // 创建日程
       if (path === '/events' && method === 'POST') {
-        const { id, title, date, time, endTime, location, people, raw, updatedAt, type, completed, dateConfirmed } = await request.json();
-        if (!title || !date) {
-          return json({ error: '缺少必填字段' }, 400, headers);
-        }
+        const body = await request.json().catch(() => null);
+        const norm = normalizeEvent(body);
+        if (!norm.ok) return json({ error: norm.error }, 400, headers);
+        const v = norm.value;
+        const id = body.id;
 
-        const now = new Date().toISOString();
-        const eventId = id || crypto.randomUUID();
+        const eventId = typeof id === 'string' && id ? id : crypto.randomUUID();
         // 服务端权威：客户端传的 updatedAt 一律忽略。
         // 设备时钟偏差直接造成丢失更新（两个设备各改一条，谁的时钟快谁赢）。
         const ts = Date.now();
@@ -700,7 +827,7 @@ export default {
         if (id) {
           const owner = await env.DB.prepare(
             'SELECT user_id FROM events WHERE id = ?'
-          ).bind(id).first();
+          ).bind(eventId).first();
           if (owner && owner.user_id !== userId) {
             return json({ error: '无权修改他人的日程' }, 403, headers);
           }
@@ -709,7 +836,7 @@ export default {
         // deleted_at = 0：若这个 id 之前被软删除过，重新创建即复活。
         await env.DB.prepare(
           'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, deleted_at = 0, updated_at = excluded.updated_at'
-        ).bind(eventId, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, dateConfirmed === 0 ? 0 : 1, ts).run();
+        ).bind(eventId, userId, v.title, v.date, v.time, v.endTime, v.location, v.people, v.raw, v.type, v.completed, v.dateConfirmed, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
       }
@@ -785,7 +912,10 @@ export default {
       // 更新日程
       if (path.startsWith('/events/') && method === 'PUT') {
         const eventId = path.split('/')[2];
-        const { title, date, time, endTime, location, people, raw, type, completed } = await request.json();
+        const body = await request.json().catch(() => null);
+        const norm = normalizeEvent(body);
+        if (!norm.ok) return json({ error: norm.error }, 400, headers);
+        const v = norm.value;
 
         const existing = await env.DB.prepare(
           'SELECT * FROM events WHERE id = ? AND user_id = ?'
@@ -797,11 +927,17 @@ export default {
         const ts = Date.now();
         // completed 缺省时保留原值 —— 不传就把勾选状态抹成未完成
         // 是一种静默的数据丢失，客户端漏传字段不该有这么大杀伤力。
-        const newCompleted = typeof completed === 'boolean' ? (completed ? 1 : 0) : existing.completed;
+        const newCompleted = typeof body.completed === 'boolean' ? (body.completed ? 1 : 0) : existing.completed;
+        // dateConfirmed 同样缺省保留。
+        // 这个字段之前整段漏写，导致「用户改了日期 → 本地待确认标记消失 →
+        // 下次全量同步又从服务端拉回 0 → 标记复活」。
+        const newDateConfirmed = body.dateConfirmed === 0 ? 0
+          : body.dateConfirmed === 1 ? 1
+          : existing.date_confirmed;
         // 编辑一条被删掉的记录等于复活它（用户动作比删除新）
         await env.DB.prepare(
-          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, deleted_at = 0, updated_at = ? WHERE id = ? AND user_id = ?'
-        ).bind(title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', newCompleted, ts, eventId, userId).run();
+          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, date_confirmed = ?, deleted_at = 0, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(v.title, v.date, v.time, v.endTime, v.location, v.people, v.raw, v.type, newCompleted, newDateConfirmed, ts, eventId, userId).run();
 
         return json({ ok: true, updated_at: ts }, 200, headers);
       }

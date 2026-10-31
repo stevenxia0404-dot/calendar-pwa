@@ -57,6 +57,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8787 npm run dev
 | `npm run lint` | ESLint |
 | `cd workers-api && npm run migrate` | 执行数据库迁移（本地） |
 | `cd workers-api && npm run migrate:remote` | 执行数据库迁移（线上） |
+| `cd workers-api && npm run verify:api` | 后端接口回归验证（27 项断言，需先起本地 Worker） |
 
 **测试怎么跑**：Node 22 自带 `--experimental-strip-types`，所以 `.ts` 测试文件能直接跑，
 不需要装 ts-node / vitest。`tests/` 下按模块分文件。
@@ -143,8 +144,12 @@ npx wrangler pages deploy dist --project-name=cabin-english-trainer
 | 名称 | 用途 | 缺失的后果 |
 |---|---|---|
 | `JWT_SECRET` | 签发与校验登录令牌 | **不配会导致所有设备被登出**（每次冷启动密钥都变）。代码会打 `[FATAL]` 警告并用随机兜底密钥，登录状态不会保留 |
+| `ADMIN_KEY` | 反馈管理页（`/?key=...`）的访问密钥 | 管理页返回 503，不会退回任何默认密码。这个页面原来用硬编码密码，已改为读 secret |
 | `RESEND_API_KEY` | 发验证码邮件 | 登录不可用。失败时**不会**回传验证码，接口返回 `code_sent: false` |
-| `COZE_API_TOKEN` | Coze Bot（白名单邮箱） | 白名单用户走不了 Coze 模式 |
+
+> v4.0 已移除全部 AI 链路，`COZE_API_TOKEN` **不再需要**，
+> 服务端的 `/ai/chat` 代理也已删除。`FAMILY_EMAILS` 仍保留但只影响
+> 登录接口返回的 `role` 字段，不再改变任何行为。
 
 Workers AI（语音转写）需要账号已开通，免费额度 10,000 Neurons/天，
 Whisper 约 41.14 neurons/分钟，折合约 243 分钟音频/天。超额返回 429，

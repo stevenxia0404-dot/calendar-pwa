@@ -18,3 +18,12 @@ binding = "AI"
 SENDER_EMAIL = "noreply@boluomate.com"
 # 以下变量在 Cloudflare Dashboard 或 wrangler secret 中设置：
 # JWT_SECRET = "你的随机密钥（至少32位）"
+# ADMIN_KEY  = "管理页面的密钥（未设置时管理页返回 503，不会退回默认密码）"
+#
+# 两项都要用 wrangler secret put 写入，不要写在这个文件里：
+#   npx wrangler secret put JWT_SECRET
+#   npx wrangler secret put ADMIN_KEY
+#
+# 本地开发时写在 workers-api/.dev.vars（该文件已在 .gitignore 里）：
+#   JWT_SECRET=本地用的随机串至少32位
+#   ADMIN_KEY=本地管理页密钥

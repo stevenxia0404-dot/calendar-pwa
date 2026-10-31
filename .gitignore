@@ -27,6 +27,9 @@ yarn-error.log*
 
 # local env files
 .env*.local
+# wrangler 本地 secret（JWT_SECRET / ADMIN_KEY 等）
+.dev.vars
+**/.dev.vars
 
 # vercel
 .vercel

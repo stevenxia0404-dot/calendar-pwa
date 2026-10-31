@@ -29,6 +29,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://schedule-api.boluom
 // 同时能挡住构造出来的超大文件把浏览器内存拖垮。
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 
+// 导入行数上限。
+// 只限文件大小不够 —— 5MB 的 xlsx 可能有几万行，
+// 逐行解析再加上预览渲染，足以把手机浏览器卡死。
+// 一个学期的课表通常几百行，5000 行留了充足余量。
+const MAX_IMPORT_ROWS = 5000;
+
 // ==================== 工具函数 ====================
 
 function formatLocalDate(date: Date): string {
@@ -61,20 +67,74 @@ function cellToText(c: unknown): string {
 
 // ==================== API 函数 ====================
 
-async function api(path: string, options: RequestInit = {}, token?: string | null) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...options.headers as Record<string, string> };
+// 请求选项：在标准 RequestInit 上加一个超时。
+// fetch 默认永不超时，服务端 hang 住时缓存队列会一直卡在第一条上，
+// 用户看到的是「离线待同步」，实际是请求挂死。
+type ApiOptions = RequestInit & { timeout?: number };
+
+const DEFAULT_API_TIMEOUT = 15000;
+
+function makeApiError(message: string, status: number) {
+  const err = new Error(message) as Error & { status?: number };
+  err.status = status;
+  return err;
+}
+
+// 各端点的响应结构。写清楚是为了让调用点拿到真正的类型，
+// 而不是一堆 unknown 断言 —— 断言写多了，等于没类型。
+interface ResMe { user: User }
+interface ResSendCode { code_sent?: boolean; error?: string }
+interface ResVerify { token: string; user: User }
+interface ResEvents { events: CloudEvent[]; server_time?: number }
+interface ResWrite { id?: string; ok?: boolean; updated_at?: number; deleted_at?: number }
+interface ResCalToken { cal_token?: string }
+
+async function api<T = Record<string, unknown>>(
+  path: string,
+  options: ApiOptions = {},
+  token?: string | null,
+): Promise<T> {
+  const { timeout = DEFAULT_API_TIMEOUT, ...init } = options;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...init.headers as Record<string, string> };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  const data = await res.json();
-  if (!res.ok) {
-    // 带上状态码：队列重放要区分「记录不存在」（该退回创建）
-    // 与「网络失败 / 服务端出错」（该留在队列里等重试）。
-    const err = new Error(data.error || `HTTP ${res.status}`) as Error & { status?: number };
-    err.status = res.status;
-    throw err;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { ...init, headers, signal: controller.signal });
+
+    // 先读文本再解析：网关错误（Cloudflare 502/504）返回的是 HTML，
+    // 直接 res.json() 会抛 "Unexpected token <"，既误导用户，
+    // 也让上层把「网关错误」误判成「网络不通」。
+    const text = await res.text();
+    let data: Record<string, unknown> = {};
+    if (text) {
+      try {
+        data = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        throw makeApiError(
+          res.ok ? '服务器返回了无法识别的数据' : `服务暂时不可用（HTTP ${res.status}）`,
+          res.status,
+        );
+      }
+    }
+
+    if (!res.ok) {
+      const msg = typeof data.error === 'string' ? data.error : `HTTP ${res.status}`;
+      throw makeApiError(msg, res.status);
+    }
+    return data as T;
+  } catch (e) {
+    // AbortController 触发的中断转成可读的错误，并把 status 标成 0，
+    // 让上层能与「服务端明确拒绝」区分开（前者该重试，后者不该）。
+    if ((e as Error).name === 'AbortError') {
+      throw makeApiError('请求超时，请检查网络', 0);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  return data;
 }
 
 // ==================== 类型 ====================
@@ -100,6 +160,23 @@ interface ScheduleEvent {
 }
 
 interface User { id: number; email: string; role?: 'family' | 'user'; }
+
+/** 服务端返回的原始记录形态（下划线命名，与库里字段一致） */
+interface CloudEvent {
+  id: string;
+  title: string;
+  date: string;
+  time?: string;
+  end_time?: string;
+  location?: string;
+  people?: string;
+  raw?: string;
+  type?: string;
+  completed?: number;
+  date_confirmed?: number;
+  deleted_at?: number;
+  updated_at: number;
+}
 
 // ==================== 主组件 ====================
 
@@ -165,7 +242,7 @@ export default function Home() {
   const submitFeedback = async () => {
     if (!feedbackText.trim()) return;
     try {
-      await api('/feedback', { method: 'POST', body: JSON.stringify({ text: feedbackText, email: user?.email || '' }) }, token);
+      await api<ResWrite>('/feedback', { method: 'POST', body: JSON.stringify({ text: feedbackText, email: user?.email || '' }) }, token);
       setFeedbackSent(true);
       setTimeout(() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }, 2000);
     } catch { /* ignore */ }
@@ -201,7 +278,7 @@ export default function Home() {
   // 自动验证 token
   useEffect(() => {
     if (!token) { setUser(null); return; }
-    api('/auth/me', {}, token)
+    api<ResMe>('/auth/me', {}, token)
       .then(d => setUser(d.user))
       .catch(() => { localStorage.removeItem('schedule_token'); setToken(null); setUser(null); });
   }, [token]);
@@ -250,9 +327,23 @@ export default function Home() {
   const flushQueue = async (): Promise<boolean> => {
     if (!token) return false;
 
+    // 服务端时间戳先攒着，整个队列跑完再一次性回写。
+    // 之前是每条都 setEvents(map)，队列 50 条就是 50 次全量重渲染 ——
+    // 同步本该是后台动作，不该让界面卡成这样。
+    const tsUpdates = new Map<string, number>();
+
+    const applyTimestamps = () => {
+      if (!tsUpdates.size) return;
+      setEvents(prev => prev.map(e => {
+        const ts = tsUpdates.get(e.id);
+        return ts === undefined ? e : { ...e, updatedAt: ts, synced: true };
+      }));
+      tsUpdates.clear();
+    };
+
     for (;;) {
       const q = readQueue();
-      if (!q.length) { setPendingCount(0); return true; }
+      if (!q.length) { applyTimestamps(); setPendingCount(0); return true; }
       const item = q[0];
 
       try {
@@ -260,21 +351,21 @@ export default function Home() {
 
         if (item.op === 'delete') {
           try {
-            const r = await api(`/events/${item.id}`, { method: 'DELETE' }, token);
+            const r = await api<ResWrite>(`/events/${item.id}`, { method: 'DELETE' }, token);
             serverTs = r.updated_at || 0;
           } catch (e) {
             // 服务端本来就没有这条 → 视为已删除，别把队列卡住
             if ((e as { status?: number }).status !== 404) throw e;
           }
         } else if (item.op === 'create') {
-          const r = await api('/events', {
+          const r = await api<ResWrite>('/events', {
             method: 'POST',
             body: JSON.stringify({ id: item.id, ...item.payload }),
           }, token);
           serverTs = r.updated_at || 0;
         } else {
           try {
-            const r = await api(`/events/${item.id}`, {
+            const r = await api<ResWrite>(`/events/${item.id}`, {
               method: 'PUT',
               body: JSON.stringify(item.payload),
             }, token);
@@ -282,7 +373,7 @@ export default function Home() {
           } catch (e) {
             // 服务端没有这条（旧数据，或别处删过）→ 退回创建
             if ((e as { status?: number }).status === 404) {
-              const r = await api('/events', {
+              const r = await api<ResWrite>('/events', {
                 method: 'POST',
                 body: JSON.stringify({ id: item.id, ...item.payload }),
               }, token);
@@ -294,15 +385,33 @@ export default function Home() {
         // 服务端时间回写本地。
         // 本地时间戳若比服务端大，下次拉取会把这版判成「本地更新」，
         // 于是服务端的版本永远拉不下来 —— 所以必须以服务端为准。
-        if (serverTs) {
-          setEvents(prev => prev.map(e =>
-            e.id === item.id ? { ...e, updatedAt: serverTs, synced: true } : e));
-        }
+        if (serverTs) tsUpdates.set(item.id, serverTs);
 
         writeQueue(removeOp(readQueue(), item.id));
         setPendingCount(readQueue().length);
-      } catch {
-        // 网络不通或服务端出错：原样保留队列，等下次重试
+      } catch (e) {
+        const status = (e as { status?: number }).status ?? 0;
+
+        // 关键区分：队列必须能「消化」一条永久失败的操作，
+        // 否则它会永远卡在队首，后面的操作全部跟着推不上去 ——
+        // 用户以为在同步，实际从那一刻起一条都没成功。
+        //
+        //   4xx（400/403/422…）→ 这条数据本身有问题，重试一万次也一样。
+        //                        丢弃它，继续下一条。
+        //   401              → 登录态问题，不是数据问题。留着等重新登录。
+        //   0 / 5xx          → 网络或服务端临时故障。留着等下次重试。
+        const permanent = status >= 400 && status < 500 && status !== 401;
+
+        if (permanent) {
+          console.warn('丢弃无法同步的操作（服务端拒绝）:', item.id, item.op, status);
+          writeQueue(removeOp(readQueue(), item.id));
+          setPendingCount(readQueue().length);
+          continue;
+        }
+
+        // 网络不通或服务端出错：已成功的那些时间戳仍要落盘，
+        // 否则它们会被当成「没同步过」，下次重新入队再传一遍。
+        applyTimestamps();
         setSyncState('offline');
         setPendingCount(readQueue().length);
         return false;
@@ -342,7 +451,7 @@ export default function Home() {
       if (!(await flushQueue())) return false;
 
       const qs = since ? `?since=${encodeURIComponent(since)}` : '';
-      const { events: cloudEvents, server_time } = await api(`/events${qs}`, {}, token);
+      const { events: cloudEvents, server_time } = await api<ResEvents>(`/events${qs}`, {}, token);
 
       const items: CloudItem<ScheduleEvent>[] = (cloudEvents || []).map((ce: {
         id: string; updated_at: number; deleted_at?: number; title: string; date: string;
@@ -427,7 +536,7 @@ export default function Home() {
     if (!activateEmail || activateLoading) return;
     setActivateLoading(true); setActivateError('');
     try {
-      const data = await api('/auth/send-code', { method: 'POST', body: JSON.stringify({ email: activateEmail }) });
+      const data = await api<ResSendCode>('/auth/send-code', { method: 'POST', body: JSON.stringify({ email: activateEmail }) });
       if (!data.code_sent) {
         // 邮件没送达：后端不会回传验证码，这里也不自动填码，
         // 留在邮箱步骤让用户重试，不给任何旁路。
@@ -444,7 +553,7 @@ export default function Home() {
     if (!activateCode || activateLoading) return;
     setActivateLoading(true); setActivateError('');
     try {
-      const data = await api('/auth/verify', { method: 'POST', body: JSON.stringify({ email: activateEmail, code: activateCode }) });
+      const data = await api<ResVerify>('/auth/verify', { method: 'POST', body: JSON.stringify({ email: activateEmail, code: activateCode }) });
       localStorage.setItem('schedule_token', data.token);
       setToken(data.token);
       setUser(data.user);
@@ -470,14 +579,20 @@ export default function Home() {
 
 
   const [icalUrl, setIcalUrl] = useState('');
+  const [calError, setCalError] = useState('');
 
   const handleShowCalModal = async () => {
     setShowCalModal(true);
-    if (!token) return;
+    setCalError('');
+    if (!token) { setCalError('请先激活同步'); return; }
     try {
-      const data = await api('/auth/cal-token', {}, token);
-      setIcalUrl(`webcal://schedule-api.boluomate.com/events/ical?token=${encodeURIComponent(data.cal_token)}`);
-    } catch { /* ignore */ }
+      const data = await api<ResCalToken>('/auth/cal-token', {}, token);
+      setIcalUrl(`webcal://schedule-api.boluomate.com/events/ical?token=${encodeURIComponent(String(data.cal_token || ''))}`);
+    } catch (e) {
+      // 静默失败会让弹窗里出现一个空二维码，用户完全不知道发生了什么
+      setIcalUrl('');
+      setCalError((e as Error).message || '获取订阅链接失败，请稍后重试');
+    }
   };
 
   const copyIcalUrl = async () => {
@@ -556,7 +671,9 @@ export default function Home() {
     if (detailDate !== editForm.date) setDetailDate(editForm.date);
   };
 
-  const deleteEvent = async (id: string) => {
+  // 删除。同步是「入队 + 后台重放」，所以这里不需要 await ——
+  // 界面立刻把这条移走，推送成功与否交给队列处理。
+  const deleteEvent = (id: string) => {
     if (!confirm('确定要删除这个日程吗？')) return;
     setEvents(prev => prev.filter(e => e.id !== id));
     if (isOnline && token) {
@@ -566,7 +683,7 @@ export default function Home() {
     }
   };
 
-  const toggleTaskCompleted = async (id: string) => {
+  const toggleTaskCompleted = (id: string) => {
     const ev = events.find(e => e.id === id);
     if (!ev) return;
     const next = { ...ev, completed: !ev.completed, updatedAt: Date.now() };
@@ -633,6 +750,8 @@ export default function Home() {
     const blob = new Blob(['﻿' + sample], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = 'schedule_template.csv'; a.click();
+    // 与 downloadBlob 同样的处理：不能立刻 revoke，否则部分浏览器下载中断
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
   const parseImportFile = async (file: File) => {
@@ -671,7 +790,12 @@ export default function Home() {
         };
 
         const csvLines = ['日期,开始时间,结束时间,事项,地点,人员,备注'];
+        let rowCount = 0;
         for (const r of dataRows) {
+          if (++rowCount > MAX_IMPORT_ROWS) {
+            alert(`数据太多（超过 ${MAX_IMPORT_ROWS} 行），请拆成几个文件分别导入`);
+            return;
+          }
           const cells = r.map(c => cellToText(c).trim());
           if (cells.every(c => !c)) continue;
           const pick = (i: number) => (i >= 0 && i < cells.length ? (cells[i] || '').trim() : '');
@@ -686,14 +810,29 @@ export default function Home() {
           csvLines.push(toCsvLine([date, time, endTime, content, location, people, note]));
         }
         setImportText(csvLines.join('\n'));
+      } else if (ext === 'xls') {
+        // 老版 .xls 是二进制格式，按文本读只会得到乱码，
+        // 用户看到的是「未识别到有效数据」，根本不知道该怎么办。
+        // 明确告诉他怎么转，比给个哑巴失败好。
+        alert('暂不支持老版 .xls 格式。\n请用 Excel 打开后「另存为」.xlsx 再导入。');
+        return;
       } else {
-        // PDF / docx / txt / ics / json 等→ 读为文本，交给 AI 解析
+        // 纯文本类（txt / ics / json 等）按文本读，交给下面的规则解析。
+        // 注意：这里不是 AI 解析 —— v4.0 已移除 AI 链路，
+        // 所有导入都走 importParser 的确定性规则。
         setImportText(await file.text());
       }
     } catch { alert('文件读取失败'); }
   };
 
   const parseImportText = () => {
+    // 行数先挡一道：文本解析同样吃内存，几万行的 CSV 一样能卡死页面
+    const lineCount = importText.split('\n').length;
+    if (lineCount > MAX_IMPORT_ROWS + 10) {
+      alert(`数据太多（约 ${lineCount} 行，上限 ${MAX_IMPORT_ROWS} 行），请拆成几个文件分别导入`);
+      return;
+    }
+
     const firstLine = importText.replace(/^﻿/, '').split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
     const drafts = parseImportRows(importText, looksLikeHeader(firstLine));
 
@@ -924,18 +1063,26 @@ export default function Home() {
             <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">导出到手机日历</h2>
             <p className="text-sm text-[#A0A0A0] mb-5">iPhone 相机扫码自动订阅，或复制链接手动添加</p>
 
-            <div className="flex flex-col items-center mb-4">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(icalUrl)}`}
-                alt="日历订阅二维码"
-                className="w-44 h-44 rounded-lg border border-[#E8E4DF]"
-              />
-              <p className="text-xs text-[#A0A0A0] mt-2">📷 用 iPhone 相机扫描二维码</p>
-            </div>
+            {calError ? (
+              <div className="bg-[#FFF5F0] border border-[#F5D9CC] rounded-lg p-4 mb-4">
+                <p className="text-sm text-[#C2410C]">{calError}</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col items-center mb-4">
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(icalUrl)}`}
+                    alt="日历订阅二维码"
+                    className="w-44 h-44 rounded-lg border border-[#E8E4DF]"
+                  />
+                  <p className="text-xs text-[#A0A0A0] mt-2">📷 用 iPhone 相机扫描二维码</p>
+                </div>
 
-            <div className="bg-[#F7F5F2] rounded-lg p-3 mb-1 break-all text-xs text-[#5C5C5C] font-mono select-all max-h-20 overflow-y-auto">
-              {icalUrl}
-            </div>
+                <div className="bg-[#F7F5F2] rounded-lg p-3 mb-1 break-all text-xs text-[#5C5C5C] font-mono select-all max-h-20 overflow-y-auto">
+                  {icalUrl}
+                </div>
+              </>
+            )}
 
             <div className="flex gap-2 mt-4">
               <button onClick={copyIcalUrl}

@@ -7,7 +7,8 @@
     "deploy": "wrangler deploy",
     "migrate": "node scripts/migrate.mjs",
     "migrate:remote": "node scripts/migrate.mjs --remote",
-    "migrate:list": "node scripts/migrate.mjs --list"
+    "migrate:list": "node scripts/migrate.mjs --list",
+    "verify:api": "node scripts/verify-api.js"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
