@@ -986,39 +986,49 @@ export default function Home() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
           <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-5">
-              <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明 <span className="text-[10px] font-normal text-[#C0BDB8]">v1.0</span></h2>
+              <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明 <span className="text-[10px] font-normal text-[#C0BDB8]">v4.0</span></h2>
               <button onClick={() => setShowHelp(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center transition-colors">&times;</button>
             </div>
 
             <div className="space-y-5">
               <div>
-                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">快速记录</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">直接输入自然语言，如「<span className="text-[#ED6A3B]">后天下午3点买菜</span>」「<span className="text-[#ED6A3B]">上周五组会</span>」，回车即保存。日期、时间自动识别。<br /><span className="text-xs text-[#A0A0A0]">认不出来时会标一个「待确认」，点一下改掉就行</span></p>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">记一句就够</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">直接写或直接说，如「<span className="text-[#ED6A3B]">后天下午3点买菜</span>」「<span className="text-[#ED6A3B]">上周五组会</span>」。日期、时间自动认出来。<br /><span className="text-xs text-[#A0A0A0]">认不出来会标一个「待确认」，点一下改掉就行 —— 猜错了也能改</span></p>
               </div>
 
               <div>
-                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">添加到桌面</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">iPhone Safari 点分享按钮 → 添加到主屏幕<br />Android Chrome 点菜单 → 添加到主屏幕<br /><span className="text-xs text-[#A0A0A0]">添加后像 App 一样打开，体验更流畅</span></p>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">看一周</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">上面是一周的时间轴，下面是「这一周」的记录，按天分好组。左右翻看别的周。<br /><span className="text-xs text-[#A0A0A0]">手机上看到的是「今天」加「这一周」 —— 写周报时抄的就是这一屏</span></p>
               </div>
 
               <div>
                 <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">语音输入</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">点一下麦克风开始说，再点一下结束。说完直接落库，不用二次确认。一口气说两件事，会自动记成两条。<br /><span className="text-xs text-[#A0A0A0]">微信里、Firefox 里都能用 —— 走的是服务端转写，不依赖浏览器</span></p>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">点麦克风开始说，再点一下结束。说完直接记上。一口气说两件事，会拆成两条。<br /><span className="text-xs text-[#A0A0A0]">用不了麦克风也不耽误 —— 会自动换浏览器语音，再不行就直接打字</span></p>
               </div>
 
               <div>
                 <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">多设备同步</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">点击右上角「激活」→ 输入邮箱 → 收到验证码 → 填入 → 完成。之后所有设备自动同步，无需再次登录。</p>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">点右上角「激活」→ 输入邮箱 → 收验证码 → 填上 → 完成。之后所有设备自动同步。<br /><span className="text-xs text-[#A0A0A0]">没网时先记下来，网一恢复自动补传，不会丢</span></p>
               </div>
 
               <div>
-                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">苹果日历订阅</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">激活后点日历图标 → iPhone 相机扫码 → 自动订阅。日程实时出现在系统日历里，支持小组件和通知。</p>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">导入课表</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">点导入，选 Excel 或 CSV 文件。每行都能先看看再改，确认了才进来。<br /><span className="text-xs text-[#A0A0A0]">认不出的列会问你什么意思，不瞎猜</span></p>
               </div>
 
               <div>
                 <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">导出</h3>
-                <p className="text-sm text-[#5C5C5C] leading-relaxed">点下载按钮导出 CSV 文件，可用 Excel 或 Numbers 打开。</p>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">点导出，选一段时间，存成表格、文本或 Excel 都能开。<br /><span className="text-xs text-[#A0A0A0]">三种格式内容一样，挑顺手的那个</span></p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">加到手机桌面</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">iPhone Safari 点分享 → 添加到主屏幕<br />Android Chrome 点菜单 → 添加到主屏幕<br /><span className="text-xs text-[#A0A0A0]">加完像 App 一样打开，更顺手</span></p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-[#1C1C1C] mb-1.5">日历订阅</h3>
+                <p className="text-sm text-[#5C5C5C] leading-relaxed">激活后点日历图标 → iPhone 相机扫一下 → 自动订阅。日程会出现在系统日历里。</p>
               </div>
             </div>
           </div>
