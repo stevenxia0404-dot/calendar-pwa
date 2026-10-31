@@ -4,6 +4,10 @@
 // 白名单邮箱 — Coze Bot 模式（开发者付费），其余走直调（用户自付）
 const FAMILY_EMAILS = ['417118098@qq.com'];
 
+// 墓碑回收的上次执行时刻（模块级，实例内共享）。
+// 回收是写操作，而 GET /events 每 30 秒一次，不节流会白吃 D1 写配额。
+let lastTombstoneSweep = 0;
+
 // ==================== JWT 工具 ====================
 
 const JWT_SECRET_MIN_LENGTH = 32;
@@ -557,8 +561,10 @@ export default {
 
         if (!row) return json({ error: 'Invalid token' }, 401, headers);
 
+        // 软删除的记录不推给订阅端 —— 订阅是「看还活着的东西」的通道，
+        // 墓碑只用于设备间同步对账。
         const { results: evts } = await env.DB.prepare(
-          'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? ORDER BY date, time'
+          'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? AND deleted_at = 0 ORDER BY date, time'
         ).bind(row.user_id).all();
 
         const toUTC = (d, t) => {
@@ -640,18 +646,40 @@ export default {
       // 获取日程（支持增量同步）
       if (path === '/events' && method === 'GET') {
         const since = url.searchParams.get('since');
-        let query = 'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ?';
+
+        // 服务端时间必须在查询之前取。如果先查后取，查询执行期间写入的
+        // 记录（updated_at < server_time）下次增量就拉不到了 —— 会静默漏数据。
+        const serverTime = Date.now();
+
+        // 墓碑回收：删除超过 30 天的行清理掉。
+        // 墓碑存在的意义是让删除能跨设备传播，30 天足够任何设备追上；
+        // 再留着只会让表无限膨胀。
+        //
+        // 节流：回收是写操作，而 GET 每 30 秒就一次。不节流等于
+        // 每天几千次空写，白白吃掉 D1 的写配额。每小时扫一次就够。
+        if (serverTime - lastTombstoneSweep > 3600_000) {
+          lastTombstoneSweep = serverTime;
+          const tombstoneCutoff = serverTime - 30 * 24 * 3600 * 1000;
+          await env.DB.prepare(
+            'DELETE FROM events WHERE user_id = ? AND deleted_at > 0 AND deleted_at < ?'
+          ).bind(userId, tombstoneCutoff).run();
+        }
+
+        let query = 'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at FROM events WHERE user_id = ?';
         const params = [userId];
 
         if (since) {
-          query += ' AND updated_at > ?';
+          // 用 >= 而不是 >：同一毫秒内写入的记录不能漏掉。
+          // 重复返回无害 —— 写操作是幂等的，覆盖同一条即可。
+          query += ' AND updated_at >= ?';
           params.push(parseInt(since, 10) || 0);
         }
 
         query += ' ORDER BY date, time';
 
         const { results } = await env.DB.prepare(query).bind(...params).all();
-        return json({ events: results || [] }, 200, headers);
+        // server_time 供客户端作为下次的增量起点（客户端时钟不作数）
+        return json({ events: results || [], server_time: serverTime }, 200, headers);
       }
 
       // 创建日程
@@ -663,7 +691,9 @@ export default {
 
         const now = new Date().toISOString();
         const eventId = id || crypto.randomUUID();
-        const ts = updatedAt || Date.now();
+        // 服务端权威：客户端传的 updatedAt 一律忽略。
+        // 设备时钟偏差直接造成丢失更新（两个设备各改一条，谁的时钟快谁赢）。
+        const ts = Date.now();
 
         // 归属校验：客户端可以指定 id，而 events.id 是全局主键，
         // INSERT OR REPLACE 会把别人的同行直接抹掉。写入前必须确认归属。
@@ -676,8 +706,9 @@ export default {
           }
         }
 
+        // deleted_at = 0：若这个 id 之前被软删除过，重新创建即复活。
         await env.DB.prepare(
-          'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, updated_at = excluded.updated_at'
+          'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, deleted_at = 0, updated_at = excluded.updated_at'
         ).bind(eventId, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, dateConfirmed === 0 ? 0 : 1, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
@@ -692,14 +723,18 @@ export default {
 
         const merged = [];
 
+        // 遗留接口：前端 v4.0 的同步走操作队列（逐条 POST/PUT/DELETE），
+        // 不再调用本端点。保留是为了兼容可能还在缓存里的旧版 PWA。
+        // 因此这里不再做基于客户端时间戳的冲突判定 ——
+        // 客户端时钟不可信，一律以服务端到达顺序为准。
         for (const ev of events) {
-          const { id, title, date, time, endTime, location, people, raw, updatedAt, type, completed } = ev;
+          const { id, title, date, time, endTime, location, people, raw, type, completed } = ev;
           if (!id || !title || !date) continue;
 
           // 按 id 查归属（不限 user_id）：查不到才可能是自己的新记录，
           // 查到且不属于自己就是别人的 id，必须跳过而不是覆盖。
           const existing = await env.DB.prepare(
-            'SELECT user_id, updated_at FROM events WHERE id = ?'
+            'SELECT user_id, deleted_at FROM events WHERE id = ?'
           ).bind(id).first();
 
           if (existing && existing.user_id !== userId) {
@@ -707,12 +742,15 @@ export default {
             continue;
           }
 
-          if (!existing || (updatedAt && updatedAt > existing.updated_at)) {
-            await env.DB.prepare(
-              'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, updated_at = excluded.updated_at'
-            ).bind(id, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, updatedAt || Date.now()).run();
-            merged.push(id);
-          }
+          // 墓碑不复活：别处的删除是明确的用户动作，
+          // 一条迟到的批量合并不该把它撤销。
+          if (existing && existing.deleted_at) continue;
+
+          const ts = Date.now();
+          await env.DB.prepare(
+            'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, deleted_at = 0, updated_at = excluded.updated_at'
+          ).bind(id, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
+          merged.push(id);
         }
 
         return json({ merged: merged.length }, 200, headers);
@@ -728,7 +766,14 @@ export default {
 
         if (!existing) return json({ error: '日程不存在' }, 404, headers);
 
-        const newCompleted = existing.completed ? 0 : 1;
+        // 客户端可以传明确的 completed（幂等，可安全重放）；
+        // 不传则按服务端当前值翻转（兼容旧版 PWA）。
+        let body = {};
+        try { body = await request.json(); } catch { /* 无 body 时按翻转处理 */ }
+        const newCompleted = typeof body.completed === 'boolean'
+          ? (body.completed ? 1 : 0)
+          : (existing.completed ? 0 : 1);
+
         const ts = Date.now();
         await env.DB.prepare(
           'UPDATE events SET completed = ?, updated_at = ? WHERE id = ? AND user_id = ?'
@@ -740,7 +785,7 @@ export default {
       // 更新日程
       if (path.startsWith('/events/') && method === 'PUT') {
         const eventId = path.split('/')[2];
-        const { title, date, time, endTime, location, people, raw, updatedAt, type, completed } = await request.json();
+        const { title, date, time, endTime, location, people, raw, type, completed } = await request.json();
 
         const existing = await env.DB.prepare(
           'SELECT * FROM events WHERE id = ? AND user_id = ?'
@@ -748,15 +793,20 @@ export default {
 
         if (!existing) return json({ error: '日程不存在' }, 404, headers);
 
-        const ts = updatedAt || Date.now();
+        // 服务端权威：忽略客户端的 updatedAt
+        const ts = Date.now();
+        // completed 缺省时保留原值 —— 不传就把勾选状态抹成未完成
+        // 是一种静默的数据丢失，客户端漏传字段不该有这么大杀伤力。
+        const newCompleted = typeof completed === 'boolean' ? (completed ? 1 : 0) : existing.completed;
+        // 编辑一条被删掉的记录等于复活它（用户动作比删除新）
         await env.DB.prepare(
-          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, updated_at = ? WHERE id = ? AND user_id = ?'
-        ).bind(title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts, eventId, userId).run();
+          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, deleted_at = 0, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', newCompleted, ts, eventId, userId).run();
 
         return json({ ok: true, updated_at: ts }, 200, headers);
       }
 
-      // 删除日程
+      // 删除日程（软删除）
       if (path.startsWith('/events/') && method === 'DELETE') {
         const eventId = path.split('/')[2];
 
@@ -766,10 +816,15 @@ export default {
 
         if (!existing) return json({ error: '日程不存在' }, 404, headers);
 
-        await env.DB.prepare('DELETE FROM events WHERE id = ? AND user_id = ?')
-          .bind(eventId, userId).run();
+        // 软删除：墓碑行留在库里，标记删除时刻。
+        // 硬删除会让其它设备永远留着本地副本 —— 它们从云端拉不到这条，
+        // 也就无从知道该删（v3 的删除不跨设备传播就是这么来的）。
+        const ts = Date.now();
+        await env.DB.prepare(
+          'UPDATE events SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(ts, ts, eventId, userId).run();
 
-        return json({ ok: true }, 200, headers);
+        return json({ ok: true, deleted_at: ts, updated_at: ts }, 200, headers);
       }
 
       // 获取或生成日历订阅 token（复用已有 token，避免旧链接失效）
