@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build && node -e \"require('fs').copyFileSync('public/favicon.ico','dist/favicon.ico')\"",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:cross": "node --experimental-strip-types tests/cross-check.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "lucide-react": "^1.8.0",
