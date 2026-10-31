@@ -6,6 +6,13 @@ import {
   enqueueOp, removeOp, pendingIds, readQueue, writeQueue, clearQueue, reconcile,
 } from '@/lib/syncQueue';
 import type { SyncOp, SyncPayload, CloudItem } from '@/lib/syncQueue';
+import {
+  filterByRange, toExportRow, toMatrix, toCsv, toText, exportFileName,
+} from '@/lib/exportLib';
+import type { ExportRange } from '@/lib/exportLib';
+import { buildXlsx } from '@/lib/xlsxWriter';
+import { parseImportRows, looksLikeHeader, mapColumns } from '@/lib/importParser';
+import { toCsvLine } from '@/lib/csv';
 
 
 import WeekView from '@/components/WeekView';
@@ -30,18 +37,6 @@ function formatLocalDate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function parseCsvLine(line: string): string[] {
-  const cells: string[] = [];
-  let cur = '', inQuote = false;
-  for (const ch of line) {
-    if (ch === '"') { inQuote = !inQuote; }
-    else if (ch === ',' && !inQuote) { cells.push(cur.trim()); cur = ''; }
-    else { cur += ch; }
-  }
-  cells.push(cur.trim());
-  return cells;
-}
-
 // 单元格值转文本。
 // Excel 里的「真日期」是日期序列号，解析出来是 Date 对象，
 // 直接 String() 会得到 "Mon Nov 02 2026 ..." 这种乱码，导入必失败。
@@ -61,86 +56,6 @@ function cellToText(c: unknown): string {
     if (iso) return iso[1];
   }
   return String(c);
-}
-
-function extractTime(text: string) {
-  let isPM = text.includes('下午') || text.includes('晚上');
-  let hour = 9, minute = 0;
-  let matched = false;
-
-  // 中文数字→阿拉伯数字
-  const cnNum: Record<string, number> = { '零':0, '一':1, '二':2, '两':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10 };
-  function toNum(s: string): number {
-    if (/^\d+$/.test(s)) return parseInt(s);
-    if (s.length === 1) return cnNum[s] ?? 0;
-    if (s.startsWith('十')) return 10 + (cnNum[s[1]] ?? 0);
-    if (s.endsWith('十')) return (cnNum[s[0]] ?? 0) * 10;
-    const [a, b] = s.split('十');
-    return (cnNum[a] ?? 0) * 10 + (cnNum[b] ?? 0);
-  }
-
-  let m = text.match(/([\d一二三四五六七八九十两零]{1,3})\s*点(?:\s*([\d零一二三四五六七八九十两半]+)\s*([分刻]?))?/);
-  if (m) {
-    hour = toNum(m[1]);
-    if (m[2] === '半') minute = 30;
-    else if (m[3] === '刻') minute = Math.min(toNum(m[2]) * 15, 59);
-    else if (m[2]) minute = toNum(m[2]);
-    matched = true;
-  } else {
-    m = text.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
-    if (m) { hour = parseInt(m[1]); minute = parseInt(m[2]); matched = true; isPM = false; }
-  }
-
-  if (matched && isPM && hour < 12) hour += 12;
-  if (hour > 23) hour = 23;
-  if (minute > 59) minute = 59;
-
-  return {
-    str: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
-    hour, minute, isPM, matched
-  };
-}
-
-function parseSmartDate(text: string): Date | null {
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-
-  if (text.includes('今天')) return new Date(today);
-  if (text.includes('明天')) { const d = new Date(today); d.setDate(d.getDate() + 1); return d; }
-  if (text.includes('后天')) { const d = new Date(today); d.setDate(d.getDate() + 2); return d; }
-  if (text.includes('大后天')) { const d = new Date(today); d.setDate(d.getDate() + 3); return d; }
-
-  const daysLater = text.match(/(\d+)天后/);
-  if (daysLater) { const d = new Date(today); d.setDate(d.getDate() + parseInt(daysLater[1])); return d; }
-
-  const weekDays = ['一', '二', '三', '四', '五', '六', '日', '天'];
-  const nextWeek = text.match(/下周([一二三四五六日天])/);
-  if (nextWeek) {
-    const target = weekDays.indexOf(nextWeek[1]) + 1;
-    const cur = today.getDay(); const curAdj = cur === 0 ? 7 : cur;
-    const d = new Date(today); d.setDate(d.getDate() + (7 - curAdj) + target); return d;
-  }
-
-  const thisWeek = text.match(/本周([一二三四五六日天])/);
-  if (thisWeek) {
-    const target = weekDays.indexOf(thisWeek[1]) + 1;
-    const cur = today.getDay(); const curAdj = cur === 0 ? 7 : cur;
-    let add = target - curAdj; if (add < 0) add += 7;
-    const d = new Date(today); d.setDate(d.getDate() + add); return d;
-  }
-
-  const nextMonth = text.match(/下个月(\d{1,2})[号日]/);
-  if (nextMonth) {
-    const d = new Date(today); d.setMonth(d.getMonth() + 1); d.setDate(parseInt(nextMonth[1])); return d;
-  }
-
-  const dateMatch = text.match(/(\d{1,2})月(\d{1,2})[号日]/);
-  if (dateMatch) {
-    const d = new Date(today.getFullYear(), parseInt(dateMatch[1]) - 1, parseInt(dateMatch[2]));
-    if (d < today) d.setFullYear(d.getFullYear() + 1);
-    return d;
-  }
-
-  return null;
 }
 
 // ==================== API 函数 ====================
@@ -236,6 +151,12 @@ export default function Home() {
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  // 导出：范围与格式
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportRange, setExportRange] = useState<ExportRange>('week');
+  const [exportFormat, setExportFormat] = useState<'text' | 'csv' | 'xlsx'>('text');
+  const [exportFrom, setExportFrom] = useState(formatLocalDate(new Date()));
+  const [exportTo, setExportTo] = useState(formatLocalDate(new Date()));
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState<ScheduleEvent[] | null>(null);
   const [importGroups, setImportGroups] = useState<{ id: string; name: string; count: number; time: string }[]>([]);
@@ -661,13 +582,44 @@ export default function Home() {
     }
   };
 
-  const handleExport = () => {
-    const sorted = [...events].sort((a, b) => a.date.localeCompare(b.date));
-    const rows = sorted.map(e => [e.date, e.time, e.endTime, e.title, e.location, e.people, e.raw]);
-    const csv = ['﻿日期,开始时间,结束时间,事项,地点,人员,备注', ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  // ==================== 导出 ====================
+  //
+  // 导出只有一个用途：把一段时间里的事拿出来，自己去写周报或交差。
+  // 所以三档格式内容完全一致，只是拿去用的地方不同。
+
+  const exportRows = () => filterByRange(
+    events.map(toExportRow),
+    exportRange,
+    new Date(),
+    { from: exportFrom, to: exportTo },
+  );
+
+  const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `日程表_${formatLocalDate(new Date())}.csv`; a.click();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    // 不立刻 revoke —— 立刻撤销会让部分浏览器下载失败
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const doExport = () => {
+    const rows = exportRows();
+    const name = exportFileName(exportRange, '', new Date());
+
+    if (exportFormat === 'text') {
+      downloadBlob(new Blob([toText(rows)], { type: 'text/plain;charset=utf-8;' }), `${name}.txt`);
+    } else if (exportFormat === 'csv') {
+      downloadBlob(new Blob([toCsv(rows)], { type: 'text/csv;charset=utf-8;' }), `${name}.csv`);
+    } else {
+      const bytes = buildXlsx(toMatrix(rows));
+      downloadBlob(
+        new Blob([new Uint8Array(bytes)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+        `${name}.xlsx`,
+      );
+    }
+    setShowExportModal(false);
   };
 
   const generateCsvTemplate = () => {
@@ -707,31 +659,30 @@ export default function Home() {
           dataRows = rows.slice(1);
         }
 
-        const findCol = (ks: string[]) => {
-          if (!header) return -1;
-          return header.findIndex(c => ks.some(k => c.includes(k)));
+        // 表头识别：先找完全相等的，再找包含的。
+        // 「包含」这一层必须带占用标记 —— 否则「结束时间」会被
+        // 「时间」这一列先抢走（因为它也包含「时间」）。
+        // 列映射与表头识别交给 importParser —— 与粘贴文本那条路共用一套规则
+        const headerCells = header ? header.map(c => cellToText(c).trim()) : [];
+        const hasHeader = headerCells.length > 0 && looksLikeHeader(headerCells.join(','));
+        const idx = hasHeader ? mapColumns(headerCells) : {
+          date: 0, time: 1, endTime: 2, content: 3, location: 4, people: 5, note: 6,
         };
-        const idxD = findCol(['日期']);
-        const idxT = findCol(['开始时间', '时间']);
-        const idxE = findCol(['结束时间']);
-        const idxC = findCol(['内容', '事项', '日程', '标题']);
-        const idxL = findCol(['地点', '位置']);
-        const idxP = findCol(['人员', '参与人']);
-        const idxN = findCol(['备注', '描述', '说明']);
 
         const csvLines = ['日期,开始时间,结束时间,事项,地点,人员,备注'];
         for (const r of dataRows) {
-          const s = r.map(c => cellToText(c).trim());
-          if (s.every(c => !c)) continue;
-          const date = idxD >= 0 ? s[idxD] : s[0] || '';
-          const time = idxT >= 0 ? s[idxT] : s[1] || '';
-          const endTime = idxE >= 0 ? s[idxE] : s[2] || '';
-          const content = idxC >= 0 ? s[idxC] : s[3] || '';
-          const location = idxL >= 0 ? s[idxL] : s[4] || '';
-          const people = idxP >= 0 ? s[idxP] : s[5] || '';
-          const note = idxN >= 0 ? s[idxN] : s[6] || '';
+          const cells = r.map(c => cellToText(c).trim());
+          if (cells.every(c => !c)) continue;
+          const pick = (i: number) => (i >= 0 && i < cells.length ? (cells[i] || '').trim() : '');
+          const date = pick(idx.date);
+          const time = pick(idx.time);
+          const endTime = pick(idx.endTime);
+          const content = pick(idx.content);
+          const location = pick(idx.location);
+          const people = pick(idx.people);
+          const note = pick(idx.note);
           if (!date && !content) continue;
-          csvLines.push([date, time, endTime, content, location, people, note].map(c => c.includes(',') ? `"${c}"` : c).join(','));
+          csvLines.push(toCsvLine([date, time, endTime, content, location, people, note]));
         }
         setImportText(csvLines.join('\n'));
       } else {
@@ -742,42 +693,34 @@ export default function Home() {
   };
 
   const parseImportText = () => {
-    const lines = importText.replace(/^﻿/, '').split('\n').map(l => l.trim()).filter(Boolean);
-    // 跳过表头
-    const startIdx = lines[0]?.startsWith('日期') ? 1 : 0;
-    const preview: ScheduleEvent[] = [];
+    const firstLine = importText.replace(/^﻿/, '').split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
+    const drafts = parseImportRows(importText, looksLikeHeader(firstLine));
 
-    for (let i = startIdx; i < lines.length; i++) {
-      const cells = parseCsvLine(lines[i]);
-      const colDate = cells[0] || '', colTime = cells[1] || '', colEndTime = cells[2] || '', colTitle = cells[3] || '', colLocation = cells[4] || '', colPeople = cells[5] || '', colNote = cells[6] || '';
-      const title = colTitle || '未命名';
+    if (drafts.length === 0) { alert('未识别到有效数据'); return; }
 
-      const smartDate = parseSmartDate(colNote || colTitle);
-      const timeObj = extractTime(colNote || colTitle);
-      const isTask = !colTime && !smartDate && !timeObj.matched;
-
-      let date = colDate;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        date = smartDate ? formatLocalDate(smartDate) : formatLocalDate(new Date());
-      }
-      let time = colTime;
-      if (!/^\d{2}:\d{2}$/.test(time)) {
-        time = timeObj.matched ? timeObj.str : (isTask ? '' : '09:00');
-      }
-
-      preview.push({
-        id: crypto.randomUUID(), title, date, time,
-        endTime: colEndTime, location: colLocation, people: colPeople, raw: colNote || colTitle, updatedAt: Date.now(),
-        type: isTask ? 'task' : 'event', completed: false,
-      });
-    }
-
-    if (preview.length === 0) { alert('未识别到有效数据'); return; }
-    setImportPreview(preview);
+    setImportPreview(drafts.map(d => ({
+      id: crypto.randomUUID(),
+      title: d.title,
+      date: d.date,
+      time: d.time,
+      endTime: d.endTime,
+      location: d.location,
+      people: d.people,
+      raw: d.raw,
+      updatedAt: Date.now(),
+      type: d.type,
+      completed: false,
+    })));
   };
 
   const confirmImport = () => {
     if (!importPreview) return;
+    // 没日期的行不能导入 —— 落今天是猜，猜出来的日期会悄悄错掉
+    const missingDate = importPreview.filter(e => !e.date);
+    if (missingDate.length) {
+      alert(`还有 ${missingDate.length} 行没填日期，请先补上再导入`);
+      return;
+    }
     // 去重与推送都要在 setEvents 的 updater 外面做 ——
     // updater 必须是纯函数。放在里面发网络请求，React 的 StrictMode
     // 会把它跑两遍，结果是同一批记录被推送两次。
@@ -899,8 +842,8 @@ export default function Home() {
                 <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" strokeWidth={2} /><path d="M16 2v4M8 2v4M3 10h18" strokeWidth={2} /></svg>
               </button>
             )}
-            <button onClick={handleExport}
-              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导出" title="导出CSV">
+            <button onClick={() => setShowExportModal(true)}
+              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导出" title="导出">
               <Download className="w-4 h-4 text-[#A0A0A0]" />
             </button>
             <button onClick={() => { setImportText(''); setImportPreview(null); setShowImportModal(true); }}
@@ -1103,16 +1046,26 @@ export default function Home() {
                         <button onClick={() => setImportPreview(prev => prev!.filter((_, j) => j !== i))}
                           className="text-[#A0A0A0] hover:text-red-500 px-1">&times;</button>
                       </div>
-                      <div className="flex gap-2 items-center">
-                        <input type="date" value={e.date} onChange={ev => {
+                      <div className="flex gap-2 items-center flex-wrap">
+                        <input type="date" value={e.date} placeholder="日期" onChange={ev => {
                           const next = [...importPreview]; next[i] = { ...next[i], date: ev.target.value }; setImportPreview(next);
-                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C]" />
+                        }} className={`px-2 py-1 border rounded text-xs bg-white outline-none focus:border-[#1C1C1C] ${e.date ? 'border-[#E8E4DF]' : 'border-[#ED6A3B] bg-[#FFF5F0]'}`} />
                         <input type="time" value={e.time} onChange={ev => {
                           const next = [...importPreview]; next[i] = { ...next[i], time: ev.target.value }; setImportPreview(next);
                         }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-24" />
-                        {/* v4.0：类型由系统按有无时间判断，不让用户选 */}
-                        <span className="text-xs text-[#A0A0A0] truncate flex-1">{e.raw}</span>
+                        <input type="text" value={e.endTime} placeholder="结束" onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], endTime: ev.target.value }; setImportPreview(next);
+                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-20" />
+                        <input type="text" value={e.location} placeholder="地点" onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], location: ev.target.value }; setImportPreview(next);
+                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] flex-1 min-w-20" />
+                        <input type="text" value={e.people} placeholder="人员" onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], people: ev.target.value }; setImportPreview(next);
+                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] flex-1 min-w-20" />
                       </div>
+                      {!e.date && (
+                        <p className="text-xs text-[#ED6A3B]">这一行没有日期 —— 文件里没写，导入前请补上</p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1133,7 +1086,7 @@ export default function Home() {
                 <div className="p-5 space-y-4 flex-1 flex flex-col min-h-0">
                   <p className="text-xs text-[#A0A0A0]">每行一条，格式：日期,开始时间,结束时间,事项,地点,人员,备注（无时间的自动归为任务）</p>
                   <textarea value={importText} onChange={e => setImportText(e.target.value)}
-                    placeholder={`2026-07-20,08:50,初始训练-模拟航班,青浦B777经济静态舱\n2026-07-21,12:50,团队周会,C楼201\n2026-07-22,,整理文档`}
+                    placeholder={`日期,开始时间,结束时间,事项,地点,人员,备注\n2026-11-02,08:50,10:30,初始训练-模拟航班,青浦B777经济静态舱,张教员\n2026-11-03,12:50,,团队周会,C楼201,全组\n2026-11-04,,,整理培训材料,,,培训材料归档`}
                     className="flex-1 w-full p-3 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C] resize-none font-mono" />
                   <div className="flex gap-2">
                     <label className="flex-1 h-11 rounded-lg border border-dashed border-[#D9D4CF] text-sm text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
@@ -1419,6 +1372,83 @@ export default function Home() {
       </div>
 
       {/* 输入区 —— 唯一输入入口：麦克风 + 文本框 + 同步状态 */}
+      {/* 导出弹窗 */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-[70] bg-black/40 flex items-end sm:items-center justify-center"
+          onClick={() => setShowExportModal(false)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[88vh] flex flex-col shadow-2xl"
+            onClick={ev => ev.stopPropagation()}>
+            <div className="flex justify-between items-center p-5 border-b border-[#E8E4DF] shrink-0">
+              <h2 className="font-semibold text-[#1C1C1C]">导出</h2>
+              <button onClick={() => setShowExportModal(false)}
+                className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center" aria-label="关闭">×</button>
+            </div>
+
+            <div className="p-5 space-y-5 overflow-y-auto flex-1">
+              {/* 范围 */}
+              <div>
+                <label className="text-xs text-[#A0A0A0] mb-2 block">哪段时间</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {([['today', '今天'], ['week', '本周'], ['month', '本月'], ['custom', '自定义']] as const).map(([v, label]) => (
+                    <button key={v} onClick={() => setExportRange(v)}
+                      className={`h-10 rounded-lg text-sm border transition-colors ${
+                        exportRange === v
+                          ? 'bg-[#ED6A3B] text-white border-[#ED6A3B]'
+                          : 'bg-white text-[#5C5C5C] border-[#E8E4DF] hover:bg-[#F3F1ED]'
+                      }`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {exportRange === 'custom' && (
+                  <div className="flex gap-2 items-center mt-3">
+                    <input type="date" value={exportFrom} onChange={ev => setExportFrom(ev.target.value)}
+                      className="px-2 py-1.5 border border-[#E8E4DF] rounded text-sm bg-white outline-none focus:border-[#1C1C1C]" />
+                    <span className="text-[#A0A0A0] text-xs">到</span>
+                    <input type="date" value={exportTo} onChange={ev => setExportTo(ev.target.value)}
+                      className="px-2 py-1.5 border border-[#E8E4DF] rounded text-sm bg-white outline-none focus:border-[#1C1C1C]" />
+                  </div>
+                )}
+              </div>
+
+              {/* 格式 */}
+              <div>
+                <label className="text-xs text-[#A0A0A0] mb-2 block">导出成什么</label>
+                <div className="space-y-2">
+                  {([
+                    ['text', '文本', '贴邮件、写周报'],
+                    ['csv', 'CSV', '用 Excel 打开继续加工'],
+                    ['xlsx', 'XLSX', '直接是表格，发给同事'],
+                  ] as const).map(([v, label, hint]) => (
+                    <button key={v} onClick={() => setExportFormat(v)}
+                      className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                        exportFormat === v
+                          ? 'border-[#ED6A3B] bg-[#FFF5F0]'
+                          : 'border-[#E8E4DF] bg-white hover:bg-[#F3F1ED]'
+                      }`}>
+                      <div className="text-sm font-medium text-[#1C1C1C]">{label}</div>
+                      <div className="text-xs text-[#A0A0A0] mt-0.5">{hint}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-xs text-[#A0A0A0]">
+                这个区间共 {exportRows().length} 条
+                {exportRows().length === 0 && ' —— 换个时间段试试'}
+              </p>
+            </div>
+
+            <div className="flex gap-2 p-5 border-t border-[#E8E4DF] shrink-0">
+              <button onClick={() => setShowExportModal(false)}
+                className="flex-1 h-11 rounded-lg border border-[#E8E4DF] text-sm text-[#5C5C5C] hover:bg-[#F3F1ED] transition-colors">取消</button>
+              <button onClick={doExport}
+                className="flex-1 h-11 bg-[#ED6A3B] text-white rounded-lg text-sm font-semibold hover:bg-[#D45D2E] transition-colors">导出</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <InputArea
         apiBase={API_BASE}
         token={token}
