@@ -13,6 +13,8 @@ interface SpeechRecognition extends EventTarget {
 
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
+  /** 本次事件中第一个发生变化的结果的索引 */
+  resultIndex: number;
 }
 
 interface SpeechRecognitionResultList {

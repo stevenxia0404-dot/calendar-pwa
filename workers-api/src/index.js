@@ -402,6 +402,100 @@ export default {
         return json({ ok: true }, 200, headers);
       }
 
+      // 语音转写（服务端 Whisper）—— 语音三层降级的第 1 层
+      // 路径与其它端点一致放在根路径（/events、/auth/me、/feedback），
+      // 不加 /api 前缀，避免与 Service Worker 的 /api/ 缓存路由纠缠。
+      if (path === '/asr' && method === 'POST') {
+        const payload = await requireAuth(request, env);
+        if (!payload) return json({ error: '请先激活同步' }, 401, headers);
+
+        // 没配 AI binding 就直接告诉前端降级，不要让用户对着一个 500 发呆
+        if (!env.AI) {
+          return json({
+            error: '服务端语音不可用',
+            code: 'ASR_UNAVAILABLE',
+            fallback: true,
+          }, 503, headers);
+        }
+
+        // 音频体积上限。Workers AI 单请求体上限约 25MB，
+        // 但语音记录不需要那么长 —— 5MB 足够几分钟，挡住超大请求。
+        const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
+        const contentType = request.headers.get('Content-Type') || '';
+
+        let audioBase64;
+        let mime = contentType;
+        try {
+          if (contentType.includes('application/json')) {
+            // 也接受 { audio: base64, mime: 'audio/webm' } 形式
+            const body = await request.json();
+            audioBase64 = body.audio;
+            mime = body.mime || 'application/octet-stream';
+          } else {
+            const buf = await request.arrayBuffer();
+            if (buf.byteLength === 0) {
+              return json({ error: '音频为空', code: 'ASR_EMPTY' }, 400, headers);
+            }
+            if (buf.byteLength > MAX_AUDIO_BYTES) {
+              return json({
+                error: '音频太长，请分段录制',
+                code: 'ASR_TOO_LARGE',
+              }, 413, headers);
+            }
+            const bytes = new Uint8Array(buf);
+            let binary = '';
+            // 分块拼，避免 apply 参数过多爆栈
+            const CHUNK = 0x8000;
+            for (let i = 0; i < bytes.length; i += CHUNK) {
+              binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+            }
+            audioBase64 = btoa(binary);
+          }
+        } catch {
+          return json({ error: '音频解析失败', code: 'ASR_BAD_REQUEST' }, 400, headers);
+        }
+
+        if (!audioBase64) {
+          return json({ error: '缺少音频数据', code: 'ASR_EMPTY' }, 400, headers);
+        }
+
+        try {
+          const res = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
+            audio: audioBase64,
+            language: 'zh',
+            task: 'transcribe',
+          });
+
+          const text = (res && res.text ? res.text : '').trim();
+          return json({ text }, 200, headers);
+        } catch (e) {
+          // 区分三类失败，对用户的提示与降级策略不同：
+          //   额度耗尽 → Cloudflare 抛 429 / code 3036，提示「今日额度已用完」
+          //   鉴权/未登录 → 本地开发或账号异常，提示「服务端语音未配置」
+          //   其他 → 模型调用本身失败
+          const msg = (e && e.message) ? e.message : String(e);
+          const status = (e && (e.status || e.code)) ?? '';
+          const isQuota = /3036/.test(String(status))
+            || /limit exceeded|quota|rate limit|too many requests/i.test(msg);
+          const isAuth = /not logged in|unauthorized|authentication|api token/i.test(msg);
+          console.error('Whisper 转写失败:', msg);
+
+          const code = isQuota ? 'ASR_QUOTA_EXCEEDED'
+            : isAuth ? 'ASR_UNAVAILABLE'
+            : 'ASR_FAILED';
+          const message = isQuota ? '今日语音额度已用完'
+            : isAuth ? '服务端语音未配置'
+            : '语音转写失败';
+
+          return json({
+            error: message,
+            code,
+            // 三种都该降级到浏览器语音
+            fallback: true,
+          }, isQuota ? 429 : isAuth ? 503 : 502, headers);
+        }
+      }
+
       // Coze AI 代理（需登录）
       if (path === '/ai/chat' && method === 'POST') {
         const payload = await requireAuth(request, env);

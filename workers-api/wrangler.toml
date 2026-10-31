@@ -1,11 +1,18 @@
 name = "schedule-api"
 main = "src/index.js"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
 database_name = "schedule_pro_db"
 database_id = "d647746c-e870-44c8-8678-df3152e2fc33"
+
+# Workers AI —— 语音转写（Whisper）。
+# 免费额度 10,000 Neurons/天，Whisper 约 41.14 neurons/分钟，
+# 换算约 243 分钟音频/天。超额返回 429 / code 3036，前端据此降级。
+[ai]
+binding = "AI"
 
 [vars]
 SENDER_EMAIL = "noreply@boluomate.com"
