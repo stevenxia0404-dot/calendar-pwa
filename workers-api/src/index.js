@@ -6,6 +6,27 @@ const FAMILY_EMAILS = ['417118098@qq.com'];
 
 // ==================== JWT 工具 ====================
 
+const JWT_SECRET_MIN_LENGTH = 32;
+
+// 进程级随机兜底密钥。
+// 仅在 JWT_SECRET 缺失或过短时生成一次，之后整个进程生命周期内保持不变。
+// 必须是随机的：固定密钥（哪怕是空字符串）会让任何人都能伪造任意用户的令牌。
+let fallbackJwtSecret = null;
+
+function getJwtSecret(env) {
+  const secret = env && env.JWT_SECRET;
+  if (typeof secret === 'string' && secret.length >= JWT_SECRET_MIN_LENGTH) {
+    return secret;
+  }
+  if (!fallbackJwtSecret) {
+    fallbackJwtSecret = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    console.error('[FATAL] JWT_SECRET 未配置或长度不足 32 位，已启用一次性随机密钥兜底。');
+    console.error('[FATAL] 后果：Worker 每次冷启动密钥都会变，届时所有设备都需要重新登录。');
+    console.error('[FATAL] 修复：执行 `wrangler secret put JWT_SECRET` 写入至少 32 位随机串。');
+  }
+  return fallbackJwtSecret;
+}
+
 function base64urlEncode(str) {
   return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
@@ -24,6 +45,7 @@ function str2ab(str) {
 }
 
 async function signJWT(payload, secret) {
+  if (!secret) throw new Error('JWT 密钥不可用，无法签发令牌');
   const encoder = new TextEncoder();
   const header = base64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = base64urlEncode(JSON.stringify(payload));
@@ -40,6 +62,7 @@ async function signJWT(payload, secret) {
 }
 
 async function verifyJWT(token, secret) {
+  if (!secret) return null;
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
@@ -121,6 +144,18 @@ function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+// HTML 转义。所有拼进 HTML 的用户输入都必须过这里。
+// & 必须第一个替换，否则会把后续已转义的实体二次转义。
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ==================== 邮箱发送 ====================
 
 async function sendEmail(to, subject, body, env) {
@@ -149,7 +184,7 @@ async function sendEmail(to, subject, body, env) {
 async function requireAuth(request, env) {
   const auth = request.headers.get('Authorization');
   if (!auth?.startsWith('Bearer ')) return null;
-  return await verifyJWT(auth.slice(7), env.JWT_SECRET);
+  return await verifyJWT(auth.slice(7), getJwtSecret(env));
 }
 
 // ==================== 主入口 ====================
@@ -187,8 +222,8 @@ export default {
         const t = new Date(r.created_at + 'Z');
         const ts = t.toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
         return `<tr class="row">
-          <td class="cell email">${r.email || '-'}</td>
-          <td class="cell text">${r.text.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+          <td class="cell email">${escapeHtml(r.email) || '-'}</td>
+          <td class="cell text">${escapeHtml(r.text)}</td>
           <td class="cell time">${ts}</td>
         </tr>`;
       }).join('');
@@ -276,12 +311,6 @@ export default {
         }
 
         const code = generateCode();
-        // 删除旧验证码
-        await env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email).run();
-        // 存入新验证码
-        await env.DB.prepare(
-          'INSERT INTO verification_codes (email, code) VALUES (?, ?)'
-        ).bind(email, code).run();
 
         const result = await sendEmail(email, '菠萝日程 - 验证码',
           `你的验证码是：${code}\n\n5分钟内有效。\n\n如果你没有在菠萝日程注册，请忽略此邮件。`, env);
@@ -289,8 +318,18 @@ export default {
         if (!result.ok) {
           let detail = result.error;
           try { detail = JSON.parse(result.error).message || detail; } catch {}
-          return json({ code_sent: false, code_debug: code, error: `邮件发送失败: ${detail}，请手动输入验证码` }, 200, headers);
+          console.error('验证码邮件发送失败:', detail);
+          // 邮件没送达就绝不入库：否则库里会留着一个用户没收到、
+          // 却足以登录该账号的有效验证码。
+          // 同时绝不回传验证码本身，失败就是失败，不给任何旁路。
+          return json({ code_sent: false, error: '验证码邮件发送失败，请稍后重试' }, 200, headers);
         }
+
+        // 邮件已送达才落库，并清掉该邮箱的旧验证码
+        await env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email).run();
+        await env.DB.prepare(
+          'INSERT INTO verification_codes (email, code) VALUES (?, ?)'
+        ).bind(email, code).run();
 
         return json({ code_sent: true }, 200, headers);
       }
@@ -322,7 +361,7 @@ export default {
 
         const token = await signJWT(
           { userId: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
-          env.JWT_SECRET
+          getJwtSecret(env)
         );
 
         const role = FAMILY_EMAILS.includes(email) ? 'family' : 'user';
@@ -532,8 +571,19 @@ export default {
         const eventId = id || crypto.randomUUID();
         const ts = updatedAt || Date.now();
 
+        // 归属校验：客户端可以指定 id，而 events.id 是全局主键，
+        // INSERT OR REPLACE 会把别人的同行直接抹掉。写入前必须确认归属。
+        if (id) {
+          const owner = await env.DB.prepare(
+            'SELECT user_id FROM events WHERE id = ?'
+          ).bind(id).first();
+          if (owner && owner.user_id !== userId) {
+            return json({ error: '无权修改他人的日程' }, 403, headers);
+          }
+        }
+
         await env.DB.prepare(
-          'INSERT OR REPLACE INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, updated_at = excluded.updated_at'
         ).bind(eventId, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
@@ -552,14 +602,20 @@ export default {
           const { id, title, date, time, endTime, location, people, raw, updatedAt, type, completed } = ev;
           if (!id || !title || !date) continue;
 
-          // 检查服务端版本是否更新
+          // 按 id 查归属（不限 user_id）：查不到才可能是自己的新记录，
+          // 查到且不属于自己就是别人的 id，必须跳过而不是覆盖。
           const existing = await env.DB.prepare(
-            'SELECT updated_at FROM events WHERE id = ? AND user_id = ?'
-          ).bind(id, userId).first();
+            'SELECT user_id, updated_at FROM events WHERE id = ?'
+          ).bind(id).first();
+
+          if (existing && existing.user_id !== userId) {
+            console.warn('merge 跳过属于他人的记录:', id);
+            continue;
+          }
 
           if (!existing || (updatedAt && updatedAt > existing.updated_at)) {
             await env.DB.prepare(
-              'INSERT OR REPLACE INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+              'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, updated_at = excluded.updated_at'
             ).bind(id, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, updatedAt || Date.now()).run();
             merged.push(id);
           }

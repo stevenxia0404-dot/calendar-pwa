@@ -299,11 +299,13 @@ export default function Home() {
     setActivateLoading(true); setActivateError('');
     try {
       const data = await api('/auth/send-code', { method: 'POST', body: JSON.stringify({ email: activateEmail }) });
-      setActivateStep('code');
       if (!data.code_sent) {
-        setActivateError(data.error);
-        setActivateCode(data.code_debug || '');
+        // 邮件没送达：后端不会回传验证码，这里也不自动填码，
+        // 留在邮箱步骤让用户重试，不给任何旁路。
+        setActivateError(data.error || '验证码发送失败，请稍后重试');
+        return;
       }
+      setActivateStep('code');
     } catch (e: unknown) {
       setActivateError((e as Error).message);
     } finally { setActivateLoading(false); }
