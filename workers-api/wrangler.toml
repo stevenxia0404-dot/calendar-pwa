@@ -3,6 +3,13 @@ main = "src/index.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+# Web Analytics：Worker 侧关闭。
+# Pages 侧的 Web Analytics 是在 Cloudflare Dashboard 里单独开关的，
+# 这个配置管不到（wrangler pages deploy 不会覆盖它），
+# 需要关的话去 Dashboard → Pages → schedule-pro → Web Analytics。
+[analytics]
+enabled = false
+
 [[d1_databases]]
 binding = "DB"
 database_name = "schedule_pro_db"
