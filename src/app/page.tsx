@@ -906,7 +906,9 @@ export default function Home() {
   // ==================== UI ====================
 
   return (
-    <main className="min-h-screen pb-16 flex flex-col bg-[#F7F5F2]/90">
+    // 底部不留 pb：输入区是 fixed 钉在屏幕底部的，
+    // 文档流里由 InputArea 自己的占位块让出等高空间。
+    <main className="min-h-screen flex flex-col bg-[#F7F5F2]/90">
       {/* 内容区实底：背景图只在最外圈露出，内容区不透明 ——
           隐私视觉要的是「隔着一层看不清楚」，不是「看得出背后有张图」 */}
       {/* v1.0 更新弹窗 */}

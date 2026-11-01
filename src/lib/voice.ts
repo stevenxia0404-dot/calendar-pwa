@@ -494,6 +494,36 @@ export interface RecordResult {
 }
 
 /**
+ * 提前把麦克风拿到手。
+ *
+ * 为什么需要：长按说话时，getUserMedia 是异步的，
+ * 等它 resolve 再开录，手感上会慢半秒到一秒 —— 手指按下去了，
+ * 声音还没进来，用户会以为没反应。
+ *
+ * 所以在「进入语音态」（点语音图标那一下）就把麦克风申请好。
+ * 那一下本身就是用户手势，正好满足 Safari「必须在手势内调 getUserMedia」的要求。
+ * 顺带还省了第二次授权提示 —— 浏览器语音识别也要麦克风，权限一次给全。
+ */
+export interface PrewarmedMic {
+  stream: MediaStream;
+  meter: LevelMeter | null;
+}
+
+export async function prewarmMicrophone(): Promise<PrewarmedMic | null> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return null;
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    return null;
+  }
+  // AudioContext 也要在手势的同步部分建好，所以现在就建
+  const meter = createLevelMeter();
+  meter?.attach(stream);
+  return { stream, meter };
+}
+
+/**
  * 开始录音，并说明失败原因。
  *
  * 为什么不让 startRecording 直接返回 null：
@@ -501,23 +531,30 @@ export interface RecordResult {
  * 前者只能让用户去授权，后者还能降级到浏览器语音。
  * 混成一个 null，调用方就只能给一句含糊的「没有麦克风权限」。
  */
-export async function startRecordingDetailed(maxDurationMs = 60000): Promise<RecordResult> {
+export async function startRecordingDetailed(
+  maxDurationMs = 60000,
+  pre?: PrewarmedMic | null,
+): Promise<RecordResult> {
   if (!hasMediaRecorder()) return { ok: false, reason: 'UNSUPPORTED' };
 
   // AudioContext 必须在用户手势的同步部分创建（Safari 限制），
   // 所以要在 await getUserMedia 之前建好 meter。
-  const meter = createLevelMeter();
+  const meter = pre?.meter ?? createLevelMeter();
 
   let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch {
-    meter?.dispose();
-    return { ok: false, reason: 'NO_PERMISSION' };
+  if (pre?.stream) {
+    // 用预热好的流 —— 长按到出声音之间没有等待
+    stream = pre.stream;
+  } else {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      meter?.dispose();
+      return { ok: false, reason: 'NO_PERMISSION' };
+    }
+    // Analyser 与 MediaRecorder 共用同一个流，互不干扰
+    meter?.attach(stream);
   }
-
-  // Analyser 与 MediaRecorder 共用同一个流，互不干扰
-  meter?.attach(stream);
 
   const mimeType = pickMimeType();
   let recorder: MediaRecorder;

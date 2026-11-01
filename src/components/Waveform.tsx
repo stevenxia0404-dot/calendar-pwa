@@ -29,6 +29,16 @@ export interface WaveformProps {
   color?: string;
   /** 柱数量 */
   bars?: number;
+  /**
+   * 渲染方式：
+   *   bars —— 上下对称的竖条
+   *   dots —— 一排圆点，每个点对应最近一帧的时刻
+   *
+   * 两种共用同一份历史轨迹数据，所以「声音的形状」是一样的，
+   * 只是表达方式不同。dots 更轻、更像「一排跳动的点」，
+   * 放在胶囊里不喧宾夺主。
+   */
+  variant?: 'bars' | 'dots';
   className?: string;
 }
 
@@ -53,14 +63,15 @@ export default function Waveform({
   active,
   color = '#ED6A3B',
   bars = 42,
+  variant = 'bars',
   className = '',
 }: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // 所有会变的参数都走 ref —— effect 只跑一次，
   // 否则每次父组件重渲染都会重建循环、丢掉历史轨迹（波形会闪一下重来）
-  const optsRef = useRef({ getLevel, active, color, bars });
-  optsRef.current = { getLevel, active, color, bars };
+  const optsRef = useRef({ getLevel, active, color, bars, variant });
+  optsRef.current = { getLevel, active, color, bars, variant };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -73,7 +84,7 @@ export default function Waveform({
     let raf = 0;
 
     const draw = () => {
-      const { getLevel: get, active: on, color: c, bars: n } = optsRef.current;
+      const { getLevel: get, active: on, color: c, bars: n, variant: kind } = optsRef.current;
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -96,18 +107,37 @@ export default function Waveform({
         history.push(smoothed);
         while (history.length > n) history.shift();
 
-        const gap = 2;
-        const barW = Math.max(1.5, (w - gap * (n - 1)) / n);
-        const maxH = Math.max(2, h / 2 - 2);
         const mid = h / 2;
-
         ctx.fillStyle = c;
-        for (let i = 0; i < history.length; i++) {
-          // 保底 2px：静音时是一条线，不是空白
-          const barH = Math.max(2, history[i] * maxH);
-          const x = i * (barW + gap);
-          roundRect(ctx, x, mid - barH, barW, barH * 2, Math.min(barW / 2, 2));
-          ctx.fill();
+
+        if (kind === 'dots') {
+          // 一排圆点：每个点对应最近一帧的时刻。
+          // 点的大小 = 那一刻的音量，于是说话的高低起伏看得见。
+          const gap = 13;
+          const count = Math.max(8, Math.min(n, Math.floor(w / gap)));
+          const step = w / count;
+          const base = Math.min(3.2, step / 2 - 1.5);
+          const maxR = Math.max(base + 1, Math.min(step / 2 - 1, base * 2.6));
+          const start = history.length - count;
+          for (let i = 0; i < count; i++) {
+            const v = history[start + i] ?? 0;
+            const r = base + v * (maxR - base);
+            const x = step * i + step / 2;
+            ctx.beginPath();
+            ctx.arc(x, mid, r, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else {
+          const gap = 2;
+          const barW = Math.max(1.5, (w - gap * (n - 1)) / n);
+          const maxH = Math.max(2, h / 2 - 2);
+          for (let i = 0; i < history.length; i++) {
+            // 保底 2px：静音时是一条线，不是空白
+            const barH = Math.max(2, history[i] * maxH);
+            const x = i * (barW + gap);
+            roundRect(ctx, x, mid - barH, barW, barH * 2, Math.min(barW / 2, 2));
+            ctx.fill();
+          }
         }
       }
 
@@ -118,6 +148,8 @@ export default function Waveform({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // 波形是纯装饰，交给屏幕阅读器只会变成噪音
-  return <canvas ref={canvasRef} className={className} aria-hidden="true" />;
+  // 波形是纯装饰，交给屏幕阅读器只会变成噪音。
+  // min-w-0 必须带上：canvas 的固有宽度（默认 300px）在 flex 容器里
+  // 会成为 min-width 下限，不加这一句它会把旁边的计时挤出去胶囊。
+  return <canvas ref={canvasRef} className={`min-w-0 ${className}`} aria-hidden="true" />;
 }
