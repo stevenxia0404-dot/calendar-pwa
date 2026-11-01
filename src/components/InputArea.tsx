@@ -40,12 +40,14 @@ export interface InputAreaProps {
   pendingCount?: number;
   /** 窄屏 */
   isNarrow: boolean;
+  /** 点「去激活」→ 打开激活弹窗 */
+  onActivate?: () => void;
 }
 
 type VoiceState = 'idle' | 'recording' | 'transcribing' | 'browser';
 
 export default function InputArea({
-  apiBase, token, onSubmit, syncState, pendingCount = 0, isNarrow,
+  apiBase, token, onSubmit, syncState, pendingCount = 0, isNarrow, onActivate,
 }: InputAreaProps) {
   const [text, setText] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -88,7 +90,12 @@ export default function InputArea({
 
   const startServerVoice = async () => {
     if (!token) {
-      setNotice('登录后才能用语音记录');
+      // 第 2 层（浏览器语音）不需要登录 —— 只有第 1 层（服务端转写）要。
+      // 原来这里直接 return，等于「没登录 = 语音整个不可用」。
+      // 但语音是这个产品的核心（不用配置、不用打字、一句话就记），
+      // 不能因为没登录就把它堵死：先降级到浏览器语音，
+      // 登录之后再自动用上更准的服务端转写。
+      startBrowserVoice();
       return;
     }
     setVoiceState('recording');
@@ -147,7 +154,7 @@ export default function InputArea({
     if (handle) {
       webSpeechRef.current = handle;
       setVoiceState('browser');
-      setNotice('已切到浏览器语音');
+      setNotice(token ? '已切到浏览器语音' : '未登录，正在用浏览器语音 —— 登录后识别更准');
     } else {
       setVoiceState('idle');
       setNotice('这个浏览器不支持语音，请直接输入文字');
@@ -183,18 +190,25 @@ export default function InputArea({
 
   // 队列非空时把条数显示出来 —— 「离线待同步」这四个字
   // 让人知道东西还在，但不知道有多少、是不是真在等。
-  const syncLabel = pendingCount > 0
+  //
+  // 没激活时不能说「已同步」—— 根本没同步过。
+  // 绿点 + 已同步 会让人以为东西在云端，换台设备却看不到。
+  const syncLabel = !token
+    ? '未激活 · 只在这台设备'
+    : pendingCount > 0
     ? `${syncState === 'offline' ? '离线待同步' : '待同步'} ${pendingCount}`
     : {
         syncing: '同步中',
         synced: '已同步',
         offline: '离线待同步',
       }[syncState];
-  const syncColor = {
-    syncing: 'bg-[#ED6A3B]',
-    synced: 'bg-[#059669]',
-    offline: 'bg-[#D9D4CF]',
-  }[syncState];
+  const syncColor = !token
+    ? 'bg-[#D9D4CF]'
+    : {
+        syncing: 'bg-[#ED6A3B]',
+        synced: 'bg-[#059669]',
+        offline: 'bg-[#D9D4CF]',
+      }[syncState];
 
   const micLabel = {
     idle: '语音记录',
@@ -205,6 +219,22 @@ export default function InputArea({
 
   return (
     <div className="shrink-0 border-t border-[#E8E4DF] bg-white/90 backdrop-blur-md">
+      {/* 未激活提示 —— 这是最容易被忽略、后果最重的一种状态：
+          没激活时记下的事只在这台设备上，换台设备看不见。
+          顶栏那个小圆点太不起眼，用户会以为一切正常，
+          直到发现「手机上看不到」才发现问题。这里给一句明话。 */}
+      {!token && (
+        <div className="px-4 pt-2">
+          <button
+            onClick={onActivate}
+            className="w-full flex items-center justify-between gap-3 text-left text-[11px] text-[#8A6D3B] bg-[#FFF9EC] border border-[#F0E2C0] rounded-lg px-3 py-2 hover:bg-[#FFF4DC] transition-colors"
+          >
+            <span className="min-w-0">未激活 · 记下的事只存在这台设备上，手机电脑看不到</span>
+            <span className="shrink-0 font-medium text-[#B8860B]">去激活 →</span>
+          </button>
+        </div>
+      )}
+
       {/* 提示条 */}
       {notice && (
         <div className="px-4 pt-2">

@@ -889,10 +889,15 @@ export default function Home() {
 
   // ==================== 日历渲染 ====================
 
-  const dayEvents = (detailDate && isOnline)
+  // 当天的安排与事项。
+  // 注意：这里不按 isOnline（=已激活）过滤 —— 本地记下的事，
+  // 无论有没有激活都得看得见。以前加了 isOnline 判断，结果是
+  // 「这一周」里能看到、「今天的安排」却是空的，同一份数据两个说法，
+  // 用户会以为记录丢了。现在两处口径一致。
+  const dayEvents = (detailDate)
     ? events.filter(e => e.date === detailDate && e.type !== 'task').sort((a, b) => a.time.localeCompare(b.time))
     : [];
-  const dayTasks = (detailDate && isOnline)
+  const dayTasks = (detailDate)
     ? events.filter(e => e.date === detailDate && e.type === 'task')
         .sort((a, b) => (a.completed ? 1 : 0) - (b.completed ? 1 : 0) || b.updatedAt - a.updatedAt)
     : [];
@@ -955,7 +960,7 @@ export default function Home() {
                       : '已同步 · 多设备自动同步'}
                   </span></>
                 ) : (
-                  '未登录，点击右侧激活'
+                  '未激活 · 记下的事只在这台设备上'
                 )}
               </div>
             </div>
@@ -1614,6 +1619,7 @@ export default function Home() {
         syncState={syncState}
         pendingCount={pendingCount}
         isNarrow={isNarrow}
+        onActivate={() => setShowActivate(true)}
       />
     </main>
   );
