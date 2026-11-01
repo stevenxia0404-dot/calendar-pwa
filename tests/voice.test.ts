@@ -266,13 +266,31 @@ describe('createLevelMeter —— 实时音量', () => {
     // Safari 的硬限制：AudioContext 必须在用户手势的同步部分创建，
     // 放到 await 之后就废了（context 一直是 suspended，音量恒为 0）。
     const src = readFileSync(new URL('../src/lib/voice.ts', import.meta.url), 'utf8');
-    const fn = src.slice(src.indexOf('export async function startRecording'));
-    // 用精确的调用点匹配 —— 注释里也提到这两个名字，
-    // 按裸名字找会先撞上注释，测出个假失败
-    const meterIdx = fn.indexOf('const meter = createLevelMeter()');
+    const fn = src.slice(src.indexOf('export async function startRecordingDetailed'));
+    // 用语义匹配而不是写死代码写法 ——
+    // 写死的话，代码一改写法测试就断，而断的是「规则没变」的情况
+    const meterIdx = fn.search(/const meter = [^;]*createLevelMeter\(\)/);
     const gumIdx = fn.indexOf('navigator.mediaDevices.getUserMedia');
     assert.ok(meterIdx > -1 && gumIdx > -1, '两个调用都要存在');
     assert.ok(meterIdx < gumIdx, 'meter 必须先于 getUserMedia 创建');
+  });
+
+  test('预热过的麦克风不再重复申请', () => {
+    // 长按说话的延迟全靠这个：进入语音态就申请好，
+    // 长按时直接用。如果这里又申请一次，延迟就白费了。
+    const src = readFileSync(new URL('../src/lib/voice.ts', import.meta.url), 'utf8');
+    assert.match(src, /export async function prewarmMicrophone/, '要有预热函数');
+    const fn = src.slice(src.indexOf('export async function startRecordingDetailed'));
+    assert.match(fn, /if \(pre\?\.stream\)/, '有预热流时要走预热分支');
+    assert.match(fn, /pre\?\.meter \?\? createLevelMeter\(\)/, 'meter 优先复用预热的');
+  });
+
+  test('预热了没用上的麦克风会被释放', () => {
+    // 不释放的话系统录音指示灯一直亮着，用户会以为应用在偷录。
+    // hook 在单独的 useVoiceRecorder.ts，别读错文件
+    const src = readFileSync(new URL('../src/lib/useVoiceRecorder.ts', import.meta.url), 'utf8');
+    const fn = src.slice(src.indexOf('export function useVoiceRecorder'));
+    assert.match(fn, /getTracks\(\)\.forEach\(t => t\.stop\(\)\)/, '预热的流要能停掉');
   });
 
   test('startWebSpeech 支持实时中间结果回调', () => {
