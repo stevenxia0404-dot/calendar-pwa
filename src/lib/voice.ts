@@ -98,6 +98,21 @@ export function voiceHint(code: string): string {
     }
     return '这个浏览器不支持语音识别，请直接输入文字';
   }
+  // 浏览器语音的具体失败原因。
+  // 这些是 Web Speech API 的标准 error 值，不给对应文案的话
+  // 用户只会看到一句「语音识别出错」，完全不知道该干什么。
+  if (code === 'WEB_SPEECH_network') {
+    return '浏览器语音连不上识别服务，请改用 Safari 或直接输入文字';
+  }
+  if (code === 'WEB_SPEECH_no-speech') {
+    return '没听到声音，再说一次试试';
+  }
+  if (code === 'WEB_SPEECH_audio-capture') {
+    return '找不到麦克风，请检查设备';
+  }
+  if (code === 'WEB_SPEECH_aborted') {
+    return '语音识别已中断';
+  }
   return ERROR_MESSAGES[code] || '语音识别出错';
 }
 

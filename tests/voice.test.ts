@@ -281,3 +281,49 @@ describe('createLevelMeter —— 实时音量', () => {
     assert.match(src, /callbacks\.onInterim\?\./, '中间结果要真的回调出去');
   });
 });
+
+describe('voiceHint —— 浏览器语音的具体失败原因', () => {
+  // Web Speech API 的标准 error 值。不给对应文案的话，
+  // 用户只会看到「语音识别出错」，不知道该换浏览器还是该检查设备。
+  test('连不上识别服务 → 说清怎么办', () => {
+    const hint = voiceHint('WEB_SPEECH_network');
+    assert.match(hint, /Safari|输入文字/, hint);
+  });
+
+  test('没听到声音 → 说清是静音', () => {
+    assert.match(voiceHint('WEB_SPEECH_no-speech'), /没听到声音/, voiceHint('WEB_SPEECH_no-speech'));
+  });
+
+  test('找不到麦克风 → 说清是设备问题', () => {
+    assert.match(voiceHint('WEB_SPEECH_audio-capture'), /麦克风/, voiceHint('WEB_SPEECH_audio-capture'));
+  });
+
+  test('未知错误码也要有话可说，不能是空', () => {
+    const hint = voiceHint('WEB_SPEECH_???');
+    assert.ok(hint.length > 0, '不能返回空串');
+    assert.match(hint, /语音/, hint);
+  });
+});
+
+describe('voiceHint —— 浏览器语音的具体失败原因', () => {
+  // Web Speech API 的标准 error 值。不给对应文案的话，
+  // 用户只会看到「语音识别出错」，不知道该换浏览器还是该检查设备。
+  test('连不上识别服务 → 说清怎么办', () => {
+    const hint = voiceHint('WEB_SPEECH_network');
+    assert.match(hint, /Safari|输入文字/, hint);
+  });
+
+  test('没听到声音 → 说清是静音', () => {
+    assert.match(voiceHint('WEB_SPEECH_no-speech'), /没听到声音/, voiceHint('WEB_SPEECH_no-speech'));
+  });
+
+  test('找不到麦克风 → 说清是设备问题', () => {
+    assert.match(voiceHint('WEB_SPEECH_audio-capture'), /麦克风/, voiceHint('WEB_SPEECH_audio-capture'));
+  });
+
+  test('未知错误码也要有话可说，不能是空', () => {
+    const hint = voiceHint('WEB_SPEECH_???');
+    assert.ok(hint.length > 0, '不能返回空串');
+    assert.match(hint, /语音/, hint);
+  });
+});
