@@ -464,13 +464,30 @@ export function createLevelMeter(): LevelMeter | null {
 }
 
 /**
- * 开始录音。返回一个句柄，调用 stop() 拿到音频 Blob。
- *
- * 注意 Safari 的 MediaRecorder 支持不完整：
- * 不能用 timeslice 连续产出数据，只能全程录完再取。
+ * 录音失败的原因。三种要区别对待：
+ *   NO_PERMISSION —— 浏览器拒绝了麦克风。给浏览器语音也没用
+ *                    （它也要麦克风），只能让用户去授权。
+ *   UNSUPPORTED   —— 浏览器没有 MediaRecorder。还能降级到浏览器语音。
+ *   START_FAILED  —— 拿到了流但起不来设备。属于环境问题。
  */
-export async function startRecording(maxDurationMs = 60000): Promise<RecorderHandle | null> {
-  if (!hasMediaRecorder()) return null;
+export type RecordFailure = 'NO_PERMISSION' | 'UNSUPPORTED' | 'START_FAILED';
+
+export interface RecordResult {
+  ok: boolean;
+  handle?: RecorderHandle;
+  reason?: RecordFailure;
+}
+
+/**
+ * 开始录音，并说明失败原因。
+ *
+ * 为什么不让 startRecording 直接返回 null：
+ * 「权限被拒」和「浏览器不支持」要给的提示完全不同 ——
+ * 前者只能让用户去授权，后者还能降级到浏览器语音。
+ * 混成一个 null，调用方就只能给一句含糊的「没有麦克风权限」。
+ */
+export async function startRecordingDetailed(maxDurationMs = 60000): Promise<RecordResult> {
+  if (!hasMediaRecorder()) return { ok: false, reason: 'UNSUPPORTED' };
 
   // AudioContext 必须在用户手势的同步部分创建（Safari 限制），
   // 所以要在 await getUserMedia 之前建好 meter。
@@ -481,7 +498,7 @@ export async function startRecording(maxDurationMs = 60000): Promise<RecorderHan
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
     meter?.dispose();
-    return null; // 用户拒绝授权或没有麦克风
+    return { ok: false, reason: 'NO_PERMISSION' };
   }
 
   // Analyser 与 MediaRecorder 共用同一个流，互不干扰
@@ -494,7 +511,7 @@ export async function startRecording(maxDurationMs = 60000): Promise<RecorderHan
   } catch {
     stream.getTracks().forEach(t => t.stop());
     meter?.dispose();
-    return null;
+    return { ok: false, reason: 'START_FAILED' };
   }
 
   const chunks: BlobPart[] = [];
@@ -516,26 +533,40 @@ export async function startRecording(maxDurationMs = 60000): Promise<RecorderHan
   };
 
   return {
-    stop: () => new Promise<Blob>((resolve) => {
-      recorder.onstop = () => {
+    ok: true,
+    handle: {
+      stop: () => new Promise<Blob>((resolve) => {
+        recorder.onstop = () => {
+          cleanup();
+          resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+        };
+        try {
+          if (recorder.state !== 'inactive') recorder.stop();
+          else { cleanup(); resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })); }
+        } catch {
+          cleanup();
+          resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+        }
+      }),
+      cancel: () => {
+        clearTimeout(timer);
+        try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* ignore */ }
         cleanup();
-        resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
-      };
-      try {
-        if (recorder.state !== 'inactive') recorder.stop();
-        else { cleanup(); resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })); }
-      } catch {
-        cleanup();
-        resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
-      }
-    }),
-    cancel: () => {
-      clearTimeout(timer);
-      try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* ignore */ }
-      cleanup();
+      },
+      getLevel: () => meter?.getLevel() ?? 0,
     },
-    getLevel: () => meter?.getLevel() ?? 0,
   };
+}
+
+/**
+ * 开始录音。返回一个句柄，调用 stop() 拿到音频 Blob。
+ *
+ * 注意 Safari 的 MediaRecorder 支持不完整：
+ * 不能用 timeslice 连续产出数据，只能全程录完再取。
+ */
+export async function startRecording(maxDurationMs = 60000): Promise<RecorderHandle | null> {
+  const r = await startRecordingDetailed(maxDurationMs);
+  return r.ok ? r.handle! : null;
 }
 
 /** 用户可读的失败提示 */

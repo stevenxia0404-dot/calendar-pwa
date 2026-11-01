@@ -38,3 +38,12 @@ body {
 .animate-slide-up {
   animation: slideUp 0.35s ease-out;
 }
+
+/* 桌面端浮层：轻微放大 + 淡入，别抢注意力 —— 面板是来干活的，不是来表演的 */
+@keyframes panelIn {
+  from { opacity: 0; transform: scale(0.97) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.animate-panel-in {
+  animation: panelIn 0.18s ease-out;
+}

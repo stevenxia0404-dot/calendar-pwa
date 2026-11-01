@@ -20,15 +20,11 @@ import { Mic, Send } from 'lucide-react';
 import { parseText, ParsedResult } from '@/lib/dateParser';
 import {
   detectCapability,
-  transcribeOnServer,
-  startWebSpeech,
-  startRecording,
-  describeError,
-  voiceHint,
   isIOS,
   isSafari,
   VoiceCapability,
 } from '@/lib/voice';
+import VoicePanel from '@/components/VoicePanel';
 
 export interface InputAreaProps {
   /** API 基址 */
@@ -47,20 +43,19 @@ export interface InputAreaProps {
   onActivate?: () => void;
 }
 
-type VoiceState = 'idle' | 'recording' | 'transcribing' | 'browser';
-
 export default function InputArea({
   apiBase, token, onSubmit, syncState, pendingCount = 0, isNarrow, onActivate,
 }: InputAreaProps) {
   const [text, setText] = useState('');
-  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [notice, setNotice] = useState('');
   const [capability, setCapability] = useState<VoiceCapability | null>(null);
   /** 平台级限制提示（如 iOS 上只有 Safari 能用麦克风）—— 常驻，不自动消失 */
   const [platformHint, setPlatformHint] = useState('');
+  /** 语音面板是否打开 */
+  const [voiceOpen, setVoiceOpen] = useState(false);
 
-  const recorderRef = useRef<{ stop: () => Promise<Blob>; cancel: () => void } | null>(null);
-  const webSpeechRef = useRef<{ stop: () => void } | null>(null);
+  const micBtnRef = useRef<HTMLButtonElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setCapability(detectCapability());
@@ -70,11 +65,15 @@ export default function InputArea({
     if (isIOS() && !isSafari()) {
       setPlatformHint('iPhone 上语音只能用 Safari 打开 —— 复制网址到 Safari 就能用');
     }
-    return () => {
-      recorderRef.current?.cancel();
-      webSpeechRef.current?.stop();
-    };
   }, []);
+
+  // 输入框自增高：1 行到 4 行封顶，超出内部滚动
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
+  }, [text]);
 
   // 提示 3 秒后自动消失
   useEffect(() => {
@@ -97,104 +96,27 @@ export default function InputArea({
     submitText(text);
   };
 
-  // ==================== 语音：第 1 层（服务端） ====================
+  // ==================== 语音：打开面板 ====================
+  //
+  // 三层降级（服务端 Whisper → 浏览器语音 → 打字）现在都在
+  // VoicePanel 里面。这里只负责把面板叫出来。
+  //
+  // 为什么要面板：原来按下麦克风只有按钮变红，用户不知道设备在不在听、
+  // 有没有声音。面板里能看到实时波形，录音这件��才有反馈。
 
-  const startServerVoice = async () => {
-    if (!token) {
-      // 第 2 层（浏览器语音）不需要登录 —— 只有第 1 层（服务端转写）要。
-      // 原来这里直接 return，等于「没登录 = 语音整个不可用」。
-      // 但语音是这个产品的核心（不用配置、不用打字、一句话就记），
-      // 不能因为没登录就把它堵死：先降级到浏览器语音，
-      // 登录之后再自动用上更准的服务端转写。
-      startBrowserVoice();
-      return;
-    }
-    setVoiceState('recording');
-    const rec = await startRecording(60000);
-    if (!rec) {
-      // 拿不到麦克风 → 降级到浏览器语音，再不行就是打字
-      setNotice('没有麦克风权限');
-      startBrowserVoice();
-      return;
-    }
-    recorderRef.current = rec;
-  };
-
-  const stopServerVoice = async () => {
-    const rec = recorderRef.current;
-    recorderRef.current = null;
-    if (!rec) return;
-
-    setVoiceState('transcribing');
-    const blob = await rec.stop();
-    const result = await transcribeOnServer(blob, { token, apiBase });
-
-    if (result.ok) {
-      // 一句话可能包含多件事，逐段入库
-      for (const seg of result.segments) {
-        submitText(seg);
-      }
-      setVoiceState('idle');
-      return;
-    }
-
-    // 第 1 层失败 → 降级
-    const msg = describeError(result.code || 'ASR_FAILED');
-    setNotice(msg);
-    setVoiceState('idle');
-    // 额度耗尽或服务端不可用 → 试第 2 层
-    if (result.code === 'ASR_QUOTA_EXCEEDED' || result.code === 'ASR_UNAVAILABLE' || result.code === 'NETWORK') {
-      startBrowserVoice();
-    }
-  };
-
-  // ==================== 语音：第 2 层（浏览器） ====================
-
-  const startBrowserVoice = () => {
-    const handle = startWebSpeech('zh-CN', 1500, {
-      onSegment: (seg) => {
-        submitText(seg);
-      },
-      onError: (code) => {
-        setNotice(voiceHint(code));
-      },
-      onEnd: () => {
-        setVoiceState('idle');
-      },
-    });
-    if (handle) {
-      webSpeechRef.current = handle;
-      setVoiceState('browser');
-      setNotice(token ? '已切到浏览器语音' : '未登录，正在用浏览器语音 —— 登录后识别更准');
-    } else {
-      setVoiceState('idle');
-      setNotice(voiceHint('NO_WEB_SPEECH'));
-    }
-  };
-
-  // ==================== 麦克风按钮 ====================
-
-  const toggleVoice = () => {
-    if (voiceState === 'recording') {
-      void stopServerVoice();
-      return;
-    }
-    if (voiceState === 'browser') {
-      webSpeechRef.current?.stop();
-      webSpeechRef.current = null;
-      setVoiceState('idle');
-      return;
-    }
-    if (voiceState === 'transcribing') return;
-
-    // 第 1 层优先
-    if (capability?.canRecord) {
-      void startServerVoice();
-    } else if (capability?.canWebSpeech) {
-      startBrowserVoice();
-    } else {
+  const openVoicePanel = () => {
+    if (!capability?.canRecord && !capability?.canWebSpeech) {
       setNotice('这个设备不支持语音，请直接输入文字');
+      return;
     }
+    setVoiceOpen(true);
+  };
+
+  // 面板关掉后，焦点回到麦克风按钮 —— 别让焦点掉到 body 上，
+  // 键盘用户会「丢失位置」。
+  const handlePanelClose = () => {
+    setVoiceOpen(false);
+    setTimeout(() => micBtnRef.current?.focus(), 60);
   };
 
   // ==================== 同步状态 ====================
@@ -221,15 +143,17 @@ export default function InputArea({
         offline: 'bg-[#D9D4CF]',
       }[syncState];
 
-  const micLabel = {
-    idle: '语音记录',
-    recording: '说完点这里',
-    transcribing: '识别中',
-    browser: '浏览器语音中',
-  }[voiceState];
-
   return (
     <div className="shrink-0 border-t border-[#E8E4DF] bg-white/90 backdrop-blur-md">
+      {/* 语音面板 —— 录音时看得见波形 */}
+      <VoicePanel
+        open={voiceOpen}
+        onClose={handlePanelClose}
+        onTranscript={(text) => submitText(text)}
+        token={token}
+        apiBase={apiBase}
+        isNarrow={isNarrow}
+      />
       {/* 未激活提示 —— 这是最容易被忽略、后果最重的一种状态：
           没激活时记下的事只在这台设备上，换台设备看不见。
           顶栏那个小圆点太不起眼，用户会以为一切正常，
@@ -267,34 +191,37 @@ export default function InputArea({
       )}
 
       <div className="px-4 py-3">
-        <div className="flex items-center gap-2 bg-[#F3F1ED] p-1.5 rounded-2xl">
-          {/* 麦克风 */}
+        <div className="flex items-end gap-2 bg-[#F3F1ED] p-1.5 rounded-2xl">
+          {/* 麦克风 —— 打开语音面板 */}
           <button
-            onClick={toggleVoice}
-            disabled={voiceState === 'transcribing'}
-            title={micLabel}
-            aria-label={micLabel}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all disabled:opacity-40 ${
-              voiceState === 'recording'
-                ? 'bg-red-500 text-white animate-pulse'
-                : voiceState === 'browser'
-                ? 'bg-[#ED6A3B] text-white'
-                : 'hover:bg-[#E8E4DF] text-[#5C5C5C]'
-            }`}
+            ref={micBtnRef}
+            onClick={openVoicePanel}
+            title="语音记录"
+            aria-label="语音记录"
+            className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all hover:bg-[#E8E4DF] text-[#5C5C5C]"
           >
             <Mic className="w-5 h-5" />
           </button>
 
-          {/* 文本框 —— 与麦克风是同一件事的两个入口 */}
-          <input
-            type="text"
+          {/* 文本框 —— 与麦克风是同一件事的两个入口。
+              用 textarea 而不是 input：一句话可能很长（「明天下午三点在 C 楼 201
+              开组会，顺便把上次的检查表带过去」），单行 input 只能看到尾巴。
+              自增高 1~4 行封顶。 */}
+          <textarea
+            ref={textareaRef}
             value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSubmit();
+              // Enter 发送，Shift+Enter 换行。
+              // 中文输入法打字时 Enter 是选词，不能当发送 —— 用 isComposing 区分。
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit();
+              }
             }}
+            rows={1}
             placeholder={isNarrow ? '说一句…' : '说一句就记下来…'}
-            className="flex-1 bg-transparent px-2 py-2.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#A0A0A0] min-w-0"
+            className="flex-1 bg-transparent px-2 py-2.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#A0A0A0] min-w-0 resize-none max-h-24 overflow-y-auto"
           />
 
           <button
