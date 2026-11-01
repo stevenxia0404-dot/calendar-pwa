@@ -52,8 +52,54 @@ const ERROR_MESSAGES: Record<string, string> = {
   ASR_EMPTY: '没有录到声音',
   ASR_BAD_REQUEST: '录音格式不支持',
   NETWORK: '网络不通，已切到浏览器语音',
-  NO_MIC: '没有麦克风权限，请直接输入文字',
+  NO_MIC: '没有麦克风权限',
+  NO_WEB_SPEECH: '浏览器不支持语音识别',
+  WEB_SPEECH_START_FAILED: '无法启动语音识别',
 };
+
+/**
+ * 是不是 iOS / iPadOS。
+ *
+ * 为什么专门判这个：iOS 规定**只有 Safari 能用麦克风**。
+ * Chrome / Firefox / Edge 的 iOS 版虽然都基于 WebKit，
+ * 但 getUserMedia 与 SpeechRecognition 一律被系统挡掉，
+ * 表现是 `not-allowed` —— 报出来就是「没有麦克风权限」，
+ * 而用户在浏览器设置里根本找不到麦克风开关。
+ * 与其让人自己撞墙，不如直接告诉他该用 Safari。
+ */
+export function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  // iPadOS 13+ 会把自己伪装成 Mac，用「有触摸点」区分
+  return /iPad|iPhone|iPod/.test(ua)
+    || ((navigator.platform === 'MacIntel' || /Macintosh/.test(ua)) && (navigator.maxTouchPoints || 0) > 1);
+}
+
+/** 是不是 Safari（要排除 iOS 上的 Chrome/Firefox/Edge，它们的 UA 里也带 Safari） */
+export function isSafari(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /Safari/.test(ua) && !/Chrome|Chromium|CriOS|FxiOS|EdgiOS|Edg\//.test(ua);
+}
+
+/**
+ * 语音不可用时给一句能照着做的提示。
+ *
+ * 原则：说清楚「为什么不行」和「怎么办」，
+ * 而不是只丢一句「没有麦克风权限」让人自己猜。
+ */
+export function voiceHint(code: string): string {
+  if (code === 'NO_MIC' || code === 'NO_WEB_SPEECH' || code === 'WEB_SPEECH_START_FAILED') {
+    if (isIOS() && !isSafari()) {
+      return 'iPhone 上语音只能用 Safari：请复制网址到 Safari 打开';
+    }
+    if (code === 'NO_MIC') {
+      return '没有麦克风权限：点地址栏左侧的锁图标，允许麦克风';
+    }
+    return '这个浏览器不支持语音识别，请直接输入文字';
+  }
+  return ERROR_MESSAGES[code] || '语音识别出错';
+}
 
 // ==================== 纯逻辑部分（可单测） ====================
 

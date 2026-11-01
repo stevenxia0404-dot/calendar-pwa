@@ -24,6 +24,9 @@ import {
   startWebSpeech,
   startRecording,
   describeError,
+  voiceHint,
+  isIOS,
+  isSafari,
   VoiceCapability,
 } from '@/lib/voice';
 
@@ -53,12 +56,20 @@ export default function InputArea({
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [notice, setNotice] = useState('');
   const [capability, setCapability] = useState<VoiceCapability | null>(null);
+  /** 平台级限制提示（如 iOS 上只有 Safari 能用麦克风）—— 常驻，不自动消失 */
+  const [platformHint, setPlatformHint] = useState('');
 
   const recorderRef = useRef<{ stop: () => Promise<Blob>; cancel: () => void } | null>(null);
   const webSpeechRef = useRef<{ stop: () => void } | null>(null);
 
   useEffect(() => {
     setCapability(detectCapability());
+    // iOS 上只有 Safari 能用麦克风，Chrome/Firefox/Edge 的 iOS 版一律被系统挡掉。
+    // 与其让人点了麦克风才撞墙（报「没有麦克风权限」，但设置里根本找不到开关），
+    // 不如一进来就告诉他该用哪个浏览器。
+    if (isIOS() && !isSafari()) {
+      setPlatformHint('iPhone 上语音只能用 Safari 打开 —— 复制网址到 Safari 就能用');
+    }
     return () => {
       recorderRef.current?.cancel();
       webSpeechRef.current?.stop();
@@ -145,7 +156,7 @@ export default function InputArea({
         submitText(seg);
       },
       onError: (code) => {
-        setNotice(code === 'NO_MIC' ? '没有麦克风权限，请直接输入文字' : describeError(code));
+        setNotice(voiceHint(code));
       },
       onEnd: () => {
         setVoiceState('idle');
@@ -157,7 +168,7 @@ export default function InputArea({
       setNotice(token ? '已切到浏览器语音' : '未登录，正在用浏览器语音 —— 登录后识别更准');
     } else {
       setVoiceState('idle');
-      setNotice('这个浏览器不支持语音，请直接输入文字');
+      setNotice(voiceHint('NO_WEB_SPEECH'));
     }
   };
 
@@ -232,6 +243,17 @@ export default function InputArea({
             <span className="min-w-0">未激活 · 记下的事只存在这台设备上，手机电脑看不到</span>
             <span className="shrink-0 font-medium text-[#B8860B]">去激活 →</span>
           </button>
+        </div>
+      )}
+
+      {/* 平台级限制提示 —— 语音是这个产品的核心，
+          但 iOS 上只有 Safari 能用麦克风。与其让人点了才知道，
+          不如一进来就说清楚。 */}
+      {platformHint && (
+        <div className="px-4 pt-2">
+          <p className="text-xs text-[#8A6D3B] bg-[#FFF9EC] border border-[#F0E2C0] rounded-lg px-3 py-2">
+            {platformHint}
+          </p>
         </div>
       )}
 

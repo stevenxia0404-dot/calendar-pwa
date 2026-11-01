@@ -116,6 +116,36 @@ function parseAddedColumns(sql) {
   return cols;
 }
 
+// 从迁移文件里抽出「会建哪些表」
+function parseCreatedTables(sql) {
+  const tables = [];
+  const re = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/gi;
+  let m;
+  while ((m = re.exec(sql)) !== null) tables.push(m[1]);
+  return tables;
+}
+
+// 判断某个迁移的目标结构是否真的到位。
+//
+// 「已登记」不等于「跑过了」—— 历史回填会把没跑过的迁移标成已应用，
+// 于是迁移器永远跳过它，缺失的列永远补不上（生产环境真踩过：
+// 006/007 已登记，但 location/people/end_time 三个列从没加上，
+// 结果所有写入报「no column named end_time」，同步全断）。
+//
+// 所以每次跑迁移都要核对一遍结构，对不上就补跑。
+function migrationSatisfied(file) {
+  const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
+  const cols = parseAddedColumns(sql);
+  if (cols.length) {
+    return cols.every(c => columnExists(c.table, c.column));
+  }
+  const tables = parseCreatedTables(sql);
+  if (tables.length) {
+    return tables.every(t => tableExists(t));
+  }
+  return true; // 判不出目标就别添乱
+}
+
 // 把文件里的 ALTER TABLE ADD COLUMN 语句替换成「列已存在则跳过」的等价形式
 // D1 的 execute --file 不支持条件执行，所以这里做文本级重写：
 //   把 `ALTER TABLE t ADD COLUMN c ...;` 改为 `ALTER TABLE t ADD COLUMN c ...;`
@@ -159,8 +189,28 @@ if (LIST_ONLY) {
 }
 
 // 1) 版本表与历史登记
-//    只有在 events 表已存在（说明是旧库、001~007 都跑过了）时才回填历史版本。
-//    新库上 events 还不存在，此时回填 001~007 会让循环误判"已应用"而跳过建表。
+//    旧库要回填历史版本登记，但「旧库」不等于「所有历史迁移都跑过」。
+//
+//    踩过的坑（生产环境）：旧库只有一张 events 表（v3 时代建的），
+//    这里一刀切把 001~007 全标成「已应用」—— 其中 006/007 是
+//    ADD COLUMN location/people/end_time，从没真正执行过。
+//    结果：版本表说「跑过了」，列却不存在，
+//    之后所有写入都报 `table events has no column named end_time`，
+//    同步全断，而且版本表让迁移器永远不会再补这个列。
+//
+//    所以回填必须逐个验证「这个迁移的目标结构是否真的到位」，
+//    到位才登记；没到位就让它正常执行（执行器本身会剔除已存在的列，
+//    重复执行是安全的）。
+const HISTORY_CHECKS = [
+  ['001_v0.4.0', () => tableExists('events')],
+  ['002_cal_tokens', () => tableExists('cal_tokens')],
+  ['003_feedback', () => tableExists('feedback')],
+  ['004_tasks', () => columnExists('events', 'type')],
+  ['005_rate_limits', () => tableExists('rate_limits')],
+  ['006_location_people', () => columnExists('events', 'location') && columnExists('events', 'people')],
+  ['007_end_time', () => columnExists('events', 'end_time')],
+];
+
 if (!tableExists('schema_migrations')) {
   console.log('→ 创建 schema_migrations 表');
   wrangler([TARGET, `--command=CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)`]);
@@ -168,8 +218,21 @@ if (!tableExists('schema_migrations')) {
 if (tableExists('events')) {
   const known = appliedVersions();
   if (!known.has('001_v0.4.0')) {
-    console.log('→ 回填 001~007 历史版本登记（events 表已存在，说明旧库）');
-    wrangler([TARGET, `--command=INSERT OR IGNORE INTO schema_migrations (version) VALUES ('001_v0.4.0'),('002_cal_tokens'),('003_feedback'),('004_tasks'),('005_rate_limits'),('006_location_people'),('007_end_time')`]);
+    // 逐个检查：目标结构到位的才回填登记，没到位的留给正常执行
+    const done = [];
+    const pending = [];
+    for (const [version, check] of HISTORY_CHECKS) {
+      if (known.has(version)) continue;
+      (check() ? done : pending).push(version);
+    }
+    if (done.length) {
+      const vals = done.map(v => `'${v}'`).join(',');
+      console.log(`→ 回填历史版本登记（结构已到位）：${done.join(', ')}`);
+      wrangler([TARGET, `--command=INSERT OR IGNORE INTO schema_migrations (version) VALUES (${vals})`]);
+    }
+    if (pending.length) {
+      console.log(`→ 以下历史迁移结构未到位，将正常执行补齐：${pending.join(', ')}`);
+    }
   }
 }
 
@@ -181,9 +244,14 @@ for (const f of files) {
 
   // 实时查版本表：前一个迁移刚登记的版本要立刻生效
   if (appliedVersions().has(v)) {
-    console.log(`  ○ 跳过 ${f}（已登记）`);
-    skipped++;
-    continue;
+    // 已登记 ≠ 结构到位。历史回填可能把没真跑过的迁移标成「已应用」，
+    // 那时候缺列会永远补不上。核对一下，对不上就补跑。
+    if (migrationSatisfied(f)) {
+      console.log(`  ○ 跳过 ${f}（已登记，结构已到位）`);
+      skipped++;
+      continue;
+    }
+    console.log(`  ⚠ ${f} 版本已登记但结构未到位 —— 补跑（生产踩过：登记了但列没加上）`);
   }
 
   // 001 是破坏性重建（DROP TABLE + CREATE），
