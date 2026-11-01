@@ -268,6 +268,14 @@ export interface WebSpeechCallbacks {
   onError: (code: string, message: string) => void;
   /** 结束 */
   onEnd: () => void;
+  /**
+   * 实时中间结果 —— 还没定稿、但已经识别出来的部分。
+   * 用来显示「正在说什么」的实时字幕。
+   *
+   * 只有第 2 层（浏览器语音）有这个能力：
+   * 第 1 层的服务端 Whisper 是整段返回，录音期间拿不到任何文字。
+   */
+  onInterim?: (text: string) => void;
 }
 
 /**
@@ -315,16 +323,20 @@ export function startWebSpeech(
   };
 
   r.onresult = (e: SpeechRecognitionEvent) => {
+    let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const result = e.results[i];
       if (result.isFinal) {
         finalText += result[0].transcript;
       } else {
-        // 中间结果只用来判断「还在说话」，不计入文本
+        // 中间结果：既用来判断「还在说话」，也拿来显示实时字幕
+        interim += result[0].transcript;
         resetSilenceTimer();
         continue;
       }
     }
+    // 实时字幕 = 已定稿的 + 还没定稿的
+    callbacks.onInterim?.((finalText + interim).trim());
     resetSilenceTimer();
   };
 
@@ -366,6 +378,89 @@ export function startWebSpeech(
 export interface RecorderHandle {
   stop: () => Promise<Blob>;
   cancel: () => void;
+  /**
+   * 当前音量（0~1 的 RMS）。
+   * 拿不到 Analyser 时恒为 0 —— 波形会保持一条平线，
+   * 而不是变成空白（空白会被误解成「坏了」）。
+   */
+  getLevel: () => number;
+}
+
+// ==================== 实时音量（画波形用） ====================
+
+export interface LevelMeter {
+  /** 接到麦克风流上开始取数 */
+  attach: (stream: MediaStream) => void;
+  /** 当前音量（0~1 的 RMS） */
+  getLevel: () => number;
+  /** 释放 AudioContext */
+  dispose: () => void;
+}
+
+/**
+ * 建一个实时音量表。
+ *
+ * 为什么用 Web Audio 的 Analyser 而不是自己算：
+ * Analyser 走的是硬件/系统已处理好的音频路径，
+ * 拿到的是真实波形；自己从 MediaRecorder 的 chunk 解码既慢又不同步。
+ *
+ * 注意 AudioContext 必须在**用户手势的同步部分**创建（Safari 限制），
+ * 所以这个函数要在 await getUserMedia 之前调用。
+ */
+export function createLevelMeter(): LevelMeter | null {
+  if (typeof window === 'undefined') return null;
+  const Ctor = window.AudioContext
+    || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctor) return null;
+
+  let ctx: AudioContext;
+  try {
+    ctx = new Ctor();
+  } catch {
+    return null;
+  }
+
+  let analyser: AnalyserNode | null = null;
+  let source: MediaStreamAudioSourceNode | null = null;
+  let buf: Uint8Array<ArrayBuffer> | null = null;
+
+  return {
+    attach: (stream: MediaStream) => {
+      try {
+        source = ctx.createMediaStreamSource(stream);
+        analyser = ctx.createAnalyser();
+        // 1024 点：约 20~40ms 的窗口，够灵敏又不抖
+        analyser.fftSize = 1024;
+        source.connect(analyser);
+        buf = new Uint8Array(analyser.fftSize);
+      } catch {
+        analyser = null;
+        source = null;
+      }
+    },
+    getLevel: () => {
+      if (!analyser || !buf) return 0;
+      try {
+        analyser.getByteTimeDomainData(buf as Uint8Array<ArrayBuffer>);
+      } catch {
+        return 0;
+      }
+      // RMS：整段波形的均方根，比峰值更能反映「有多大声音」
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      // 人声 RMS 大约在 0.05~0.4，映射到 0~1 更符合直觉
+      return Math.min(1, rms * 3.2);
+    },
+    dispose: () => {
+      try { source?.disconnect(); } catch { /* ignore */ }
+      try { analyser?.disconnect(); } catch { /* ignore */ }
+      try { void ctx.close(); } catch { /* ignore */ }
+    },
+  };
 }
 
 /**
@@ -377,12 +472,20 @@ export interface RecorderHandle {
 export async function startRecording(maxDurationMs = 60000): Promise<RecorderHandle | null> {
   if (!hasMediaRecorder()) return null;
 
+  // AudioContext 必须在用户手势的同步部分创建（Safari 限制），
+  // 所以要在 await getUserMedia 之前建好 meter。
+  const meter = createLevelMeter();
+
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
+    meter?.dispose();
     return null; // 用户拒绝授权或没有麦克风
   }
+
+  // Analyser 与 MediaRecorder 共用同一个流，互不干扰
+  meter?.attach(stream);
 
   const mimeType = pickMimeType();
   let recorder: MediaRecorder;
@@ -390,6 +493,7 @@ export async function startRecording(maxDurationMs = 60000): Promise<RecorderHan
     recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
   } catch {
     stream.getTracks().forEach(t => t.stop());
+    meter?.dispose();
     return null;
   }
 
@@ -408,6 +512,7 @@ export async function startRecording(maxDurationMs = 60000): Promise<RecorderHan
   const cleanup = () => {
     clearTimeout(timer);
     stream.getTracks().forEach(t => t.stop());
+    meter?.dispose();
   };
 
   return {
@@ -429,6 +534,7 @@ export async function startRecording(maxDurationMs = 60000): Promise<RecorderHan
       try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* ignore */ }
       cleanup();
     },
+    getLevel: () => meter?.getLevel() ?? 0,
   };
 }
 

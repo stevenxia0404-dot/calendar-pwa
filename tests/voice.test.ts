@@ -6,6 +6,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   splitSentences,
   hasWebSpeech,
@@ -18,6 +19,7 @@ import {
   isIOS,
   isSafari,
   voiceHint,
+  createLevelMeter,
 } from '../src/lib/voice.ts';
 
 describe('断句 —— 靠 Whisper 的标点切段', () => {
@@ -237,5 +239,45 @@ describe('voiceHint —— 说清楚为什么不行、怎么办', () => {
   test('非语音类错误码仍走原提示', () => {
     const hint = voiceHint('ASR_QUOTA_EXCEEDED');
     assert.match(hint, /额度/, hint);
+  });
+});
+
+// ==================== 实时音量（画波形） ====================
+//
+// 波形是「看得见的反馈」的核心：用户按下麦克风后能看到声音在动，
+// 就知道设备真的在听。所以这条链路不能是「拿不到就空白」——
+// 空白会被误解成坏了。拿不到时必须是一条平线。
+
+describe('createLevelMeter —— 实时音量', () => {
+  test('Node 环境（没有 AudioContext）返回 null，不炸', () => {
+    // Node 里 window 不存在，必须优雅降级
+    assert.equal(createLevelMeter(), null);
+  });
+
+  test('RecorderHandle 约定 getLevel 存在', () => {
+    // 类型层面的约定：RecorderHandle 必须暴露 getLevel，
+    // 否则调用方要到处写 optional chaining，忘了就静默画不出波形
+    const src = readFileSync(new URL('../src/lib/voice.ts', import.meta.url), 'utf8');
+    assert.match(src, /getLevel: \(\) => number/, 'RecorderHandle 必须有 getLevel');
+    assert.match(src, /getLevel: \(\) => meter\?\.getLevel\(\) \?\? 0/, '拿不到 meter 时返回 0（平线），不是 undefined');
+  });
+
+  test('AudioContext 必须在 await getUserMedia 之前创建', () => {
+    // Safari 的硬限制：AudioContext 必须在用户手势的同步部分创建，
+    // 放到 await 之后就废了（context 一直是 suspended，音量恒为 0）。
+    const src = readFileSync(new URL('../src/lib/voice.ts', import.meta.url), 'utf8');
+    const fn = src.slice(src.indexOf('export async function startRecording'));
+    // 用精确的调用点匹配 —— 注释里也提到这两个名字，
+    // 按裸名字找会先撞上注释，测出个假失败
+    const meterIdx = fn.indexOf('const meter = createLevelMeter()');
+    const gumIdx = fn.indexOf('navigator.mediaDevices.getUserMedia');
+    assert.ok(meterIdx > -1 && gumIdx > -1, '两个调用都要存在');
+    assert.ok(meterIdx < gumIdx, 'meter 必须先于 getUserMedia 创建');
+  });
+
+  test('startWebSpeech 支持实时中间结果回调', () => {
+    const src = readFileSync(new URL('../src/lib/voice.ts', import.meta.url), 'utf8');
+    assert.match(src, /onInterim\?: \(text: string\) => void/, '回调要声明为可选，不能破坏现有调用方');
+    assert.match(src, /callbacks\.onInterim\?\./, '中间结果要真的回调出去');
   });
 });
