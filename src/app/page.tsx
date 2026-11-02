@@ -1306,18 +1306,6 @@ export default function Home() {
                                 原话：{events.find(e => e.id === editingEventId)?.raw}
                               </p>
                             )}
-                            {/* 原话：只在编辑时展开，平时不占地方 */}
-                            {events.find(e => e.id === editingEventId)?.raw && (
-                              <p className="text-xs text-[#A0A0A0] mt-1.5 leading-relaxed">
-                                原话：{events.find(e => e.id === editingEventId)?.raw}
-                              </p>
-                            )}
-                            {/* 原话：只在编辑时展开，平时不占地方 */}
-                            {events.find(e => e.id === editingEventId)?.raw && (
-                              <p className="text-xs text-[#A0A0A0] mt-1.5 leading-relaxed">
-                                原话：{events.find(e => e.id === editingEventId)?.raw}
-                              </p>
-                            )}
                           </div>
                           <div>
                             <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
@@ -1508,7 +1496,10 @@ export default function Home() {
             isNarrow={isNarrow}
             onEventClick={(e) => {
               const full = events.find(x => x.id === e.id);
-              if (full) { setDetailDate(full.date); setEditingEventId(full.id); }
+              // 必须用 startEdit —— 它会同时填好 editForm。
+              // 以前这里只设了 editingEventId，左边弹出来的编辑表单全是空的：
+              // 框架渲染了，但里面没有这条记录的任何内容。
+              if (full) { setDetailDate(full.date); startEdit(full); }
             }}
           />
         </div>
