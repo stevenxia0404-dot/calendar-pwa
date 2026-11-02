@@ -11,7 +11,7 @@ import {
 } from '@/lib/exportLib';
 import type { ExportRange } from '@/lib/exportLib';
 import { buildXlsx } from '@/lib/xlsxWriter';
-import { parseImportRows, looksLikeHeader, mapColumns } from '@/lib/importParser';
+import { parseImportRows, looksLikeHeader, mapColumns, xlsxRowToTemplateCells, cellToText } from '@/lib/importParser';
 import { toCsvLine } from '@/lib/csv';
 import { newId } from '@/lib/id';
 
@@ -44,26 +44,8 @@ function formatLocalDate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-// 单元格值转文本。
-// Excel 里的「真日期」是日期序列号，解析出来是 Date 对象，
-// 直接 String() 会得到 "Mon Nov 02 2026 ..." 这种乱码，导入必失败。
-function cellToText(c: unknown): string {
-  if (c === null || c === undefined) return '';
-  if (c instanceof Date) {
-    // 用 UTC 分量还原：Excel 日期序列号本身不带时区，解析库按 UTC 解释，
-    // 若用本地分量，在负时区会把纯日期偏成前一天。
-    const y = c.getUTCFullYear();
-    const m = String(c.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(c.getUTCDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  if (typeof c === 'string') {
-    // 兜底：某些解析配置下日期会直接给 ISO 字符串
-    const iso = c.match(/^(\d{4}-\d{2}-\d{2})T/);
-    if (iso) return iso[1];
-  }
-  return String(c);
-}
+// 单元格值转文本已移到 src/lib/importParser.ts ——
+// 它跟导入解析是一套规则，放一起才能被单测覆盖。
 
 // ==================== API 函数 ====================
 
@@ -796,18 +778,13 @@ export default function Home() {
             alert(`数据太多（超过 ${MAX_IMPORT_ROWS} 行），请拆成几个文件分别导入`);
             return;
           }
-          const cells = r.map(c => cellToText(c).trim());
-          if (cells.every(c => !c)) continue;
-          const pick = (i: number) => (i >= 0 && i < cells.length ? (cells[i] || '').trim() : '');
-          const date = pick(idx.date);
-          const time = pick(idx.time);
-          const endTime = pick(idx.endTime);
-          const content = pick(idx.content);
-          const location = pick(idx.location);
-          const people = pick(idx.people);
-          const note = pick(idx.note);
-          if (!date && !content) continue;
-          csvLines.push(toCsvLine([date, time, endTime, content, location, people, note]));
+          // 日期列和时间列由 cellToParts 处理 —— Excel 的「纯时间」单元格
+          // 和日期单元格都是 Date 对象，按文本拍平会把时间整个丢掉
+          // （8:50 → "1899-12-30" → 时间列空着，记录被当成没时间的）。
+          const cells = xlsxRowToTemplateCells(r, idx);
+          // 没有日期也没有事项 → 这行没什么可导的，跳过
+          if (!cells[0] && !cells[3]) continue;
+          csvLines.push(toCsvLine(cells));
         }
         setImportText(csvLines.join('\n'));
       } else if (ext === 'xls') {
@@ -1218,7 +1195,7 @@ export default function Home() {
                         <input type="time" value={e.time} onChange={ev => {
                           const next = [...importPreview]; next[i] = { ...next[i], time: ev.target.value }; setImportPreview(next);
                         }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-24" />
-                        <input type="text" value={e.endTime} placeholder="结束" onChange={ev => {
+                        <input type="time" value={e.endTime} placeholder="结束" onChange={ev => {
                           const next = [...importPreview]; next[i] = { ...next[i], endTime: ev.target.value }; setImportPreview(next);
                         }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-20" />
                         <input type="text" value={e.location} placeholder="地点" onChange={ev => {
@@ -1230,6 +1207,9 @@ export default function Home() {
                       </div>
                       {!e.date && (
                         <p className="text-xs text-[#ED6A3B]">这一行没有日期 —— 文件里没写，导入前请补上</p>
+                      )}
+                      {!e.time && !e.endTime && (
+                        <p className="text-xs text-[#ED6A3B]">这一行没有时间 —— 文件里没写，导入前请补上</p>
                       )}
                     </div>
                   ))}

@@ -10,6 +10,9 @@ import {
   mapColumns,
   normalizeDate,
   normalizeTime,
+  cellToParts,
+  cellToText,
+  xlsxRowToTemplateCells,
 } from '../src/lib/importParser.ts';
 import { parseCsvLine, escapeCsvField, toCsvLine } from '../src/lib/csv.ts';
 
@@ -178,5 +181,159 @@ describe('行解析 —— 核心是「不猜」', () => {
     const rows = parseImportRows('日期,开始时间,事项\n2026-11-02,08:50,"课,含逗号"', true);
     assert.equal(rows.length, 1);
     assert.equal(rows[0].title, '课,含逗号');
+  });
+});
+
+// ==================== xlsx 单元格取值 ====================
+//
+// 背景：用户在 Excel 里填了课表模板，导进来时间全没了。
+//
+// 根因不是模板，是读取代码：Excel 里的「时间」也是 Date 对象
+// （1899-12-30T08:50:00Z，日期部分只是 Excel 的纪元哨兵），
+// 而 cellToText 对 Date 只有一条规则 —— 一律拍成 YYYY-MM-DD。
+// 于是 8:50 变成 "1899-12-30"，时间整个丢掉，
+// 记录还被静默降级成「没时间的」（不上时间轴）。
+//
+// 这组测试锁住「Excel 的时间是 Date，不是文本」这件事。
+
+/** 与 read-excel-file 一致的序列号 → Date 换算 */
+function excelSerialToDate(serial: number): Date {
+  const daysBeforeUnixEpoch = 25569;
+  return new Date(Math.floor((serial - daysBeforeUnixEpoch) * 86400000));
+}
+
+/** Excel 的「纯时间」单元格：日期部分落在纪元哨兵上 */
+function excelTime(h: number, min: number): Date {
+  return excelSerialToDate((h * 60 + min) / (24 * 60));
+}
+
+/** Excel 的日期单元格（零点） */
+function excelDate(y: number, m: number, d: number): Date {
+  const days = Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+  return excelSerialToDate(days);
+}
+
+describe('cellToParts —— 把单元格里的日期与时间拆出来', () => {
+  test('纯时间单元格取出时间（这次 bug 的核心）', () => {
+    const p = cellToParts(excelTime(8, 50));
+    assert.equal(p.time, '08:50');
+    assert.equal(p.date, '', '纪元哨兵不是日期，不能当成 1899 年的日期导进去');
+  });
+
+  test('日期单元格取出日期，且不误判成「零点的事」', () => {
+    const p = cellToParts(excelDate(2026, 11, 20));
+    assert.equal(p.date, '2026-11-20');
+    assert.equal(p.time, '', '纯日期不该被当成零点的时间');
+  });
+
+  test('日期和时间在同一个单元格里 → 两边都取到', () => {
+    const serial = Math.round((Date.UTC(2026, 10, 20) - Date.UTC(1899, 11, 30)) / 86400000);
+    const p = cellToParts(excelSerialToDate(serial + (8 * 60 + 50) / (24 * 60)));
+    assert.equal(p.date, '2026-11-20');
+    assert.equal(p.time, '08:50');
+  });
+
+  test('1904 纪元（Mac 旧版）的纯时间也能取到', () => {
+    const p = cellToParts(new Date(Date.UTC(1904, 0, 1, 8, 50)));
+    assert.equal(p.time, '08:50');
+    assert.equal(p.date, '');
+  });
+
+  test('文本单元格：8:50 → 08:50', () => {
+    assert.deepEqual(cellToParts('8:50'), { date: '', time: '08:50' });
+  });
+
+  test('文本单元格：2026-11-20 → 只出日期', () => {
+    assert.deepEqual(cellToParts('2026-11-20'), { date: '2026-11-20', time: '' });
+  });
+
+  test('文本单元格：ISO 带时间 → 两边都出', () => {
+    assert.deepEqual(cellToParts('2026-11-20T08:50:00'), { date: '2026-11-20', time: '08:50' });
+  });
+
+  test('斜杠写法不认 —— 跟文本路径保持一致', () => {
+    assert.deepEqual(cellToParts('2026/11/20'), { date: '', time: '' });
+  });
+
+  test('数字序列号：一天的小数部分 = 纯时间', () => {
+    const p = cellToParts((8 * 60 + 50) / (24 * 60));
+    assert.equal(p.time, '08:50');
+    assert.equal(p.date, '');
+  });
+
+  test('大数字分不清是日期还是普通数字，不猜', () => {
+    assert.deepEqual(cellToParts(46284), { date: '', time: '' });
+  });
+
+  test('空值', () => {
+    assert.deepEqual(cellToParts(null), { date: '', time: '' });
+    assert.deepEqual(cellToParts(undefined), { date: '', time: '' });
+    assert.deepEqual(cellToParts(''), { date: '', time: '' });
+  });
+});
+
+describe('整行转换 —— 复刻用户那张课表', () => {
+  // 用户下载模板后填的内容：
+  //   日期 | 开始时间 | 结束时间 | 事项 | 地点 | 人员 | 备注
+  //   2026/11/20 | 8:50 | 10:30 | 初始训练 | 青浦B777经济舱 | 张教员 |
+  //   2026/11/21 | 12:50 | 13:50 | 团队周会 | C楼201 | 全组 |
+  //   2026/11/22 |      |        | 整理文档 |           |       | 培训材料归档
+  const idx = mapColumns(['日期', '开始时间', '结束时间', '事项', '地点', '人员', '备注']);
+
+  test('第一行：日期时间地点人员全部对上', () => {
+    const row = [
+      excelDate(2026, 11, 20), excelTime(8, 50), excelTime(10, 30),
+      '初始训练-模拟航班', '青浦B777经济舱', '张教员', '',
+    ];
+    assert.deepEqual(
+      xlsxRowToTemplateCells(row, idx),
+      ['2026-11-20', '08:50', '10:30', '初始训练-模拟航班', '青浦B777经济舱', '张教员', ''],
+    );
+  });
+
+  test('三行整张表都对', () => {
+    const rows = [
+      [excelDate(2026, 11, 20), excelTime(8, 50), excelTime(10, 30), '初始训练-模拟航班', '青浦B777经济舱', '张教员', ''],
+      [excelDate(2026, 11, 21), excelTime(12, 50), excelTime(13, 50), '团队周会', 'C楼201', '全组', ''],
+      [excelDate(2026, 11, 22), '', '', '整理文档', '', '', '培训材料归档'],
+    ];
+    const out = rows.map(r => xlsxRowToTemplateCells(r, idx));
+    assert.deepEqual(out[0].slice(0, 3), ['2026-11-20', '08:50', '10:30']);
+    assert.deepEqual(out[1].slice(0, 3), ['2026-11-21', '12:50', '13:50']);
+    assert.deepEqual(out[2].slice(0, 3), ['2026-11-22', '', '']);
+    assert.equal(out[2][6], '培训材料归档');
+  });
+
+  test('转成 CSV 再解析回来，时间还在（往返不丢）', () => {
+    const row = [
+      excelDate(2026, 11, 20), excelTime(8, 50), excelTime(10, 30),
+      '初始训练', '青浦B777经济舱', '张教员', '',
+    ];
+    const csv = '日期,开始时间,结束时间,事项,地点,人员,备注\n'
+      + toCsvLine(xlsxRowToTemplateCells(row, idx));
+    const drafts = parseImportRows(csv, true);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0].date, '2026-11-20');
+    assert.equal(drafts[0].time, '08:50');
+    assert.equal(drafts[0].endTime, '10:30');
+    // 关键：有时间就该是带时间轴的事，不能被静默降级成待办
+    assert.equal(drafts[0].type, 'event');
+  });
+
+  test('本来就没时间的行，仍然是「没时间」', () => {
+    const row = [excelDate(2026, 11, 22), '', '', '整理文档', '', '', '培训材料归档'];
+    const csv = '日期,开始时间,结束时间,事项,地点,人员,备注\n'
+      + toCsvLine(xlsxRowToTemplateCells(row, idx));
+    const drafts = parseImportRows(csv, true);
+    assert.equal(drafts[0].time, '');
+    assert.equal(drafts[0].type, 'task');
+  });
+
+  test('一个单元格里带日期和时间，时间列空着 → 时间取出来', () => {
+    const serial = Math.round((Date.UTC(2026, 10, 20) - Date.UTC(1899, 11, 30)) / 86400000);
+    const row = [excelSerialToDate(serial + (8 * 60 + 50) / (24 * 60)), '', '', '整理文档', '', '', ''];
+    const cells = xlsxRowToTemplateCells(row, idx);
+    assert.equal(cells[0], '2026-11-20');
+    assert.equal(cells[1], '08:50', '时间就在那个单元格里，不该丢');
   });
 });

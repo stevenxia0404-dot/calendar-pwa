@@ -47,16 +47,19 @@ export function normalizeDate(v: string): string {
   return DATE_RE.test(s) ? s : '';
 }
 
+/** 表头 → 列下标的映射 */
+export interface ColumnMap {
+  date: number; time: number; endTime: number; content: number;
+  location: number; people: number; note: number;
+}
+
 /**
  * 表头 → 列下标。
  *
  * 先找完全相等的，再找包含的。「包含」这一层必须带占用标记 ——
  * 否则「结束时间」会被「时间」这一列先抢走（因为它也包含「时间」）。
  */
-export function mapColumns(header: string[]): {
-  date: number; time: number; endTime: number; content: number;
-  location: number; people: number; note: number;
-} {
+export function mapColumns(header: string[]): ColumnMap {
   const used = new Set<number>();
   const cells = (header || []).map(c => c.trim());
 
@@ -135,6 +138,158 @@ export function parseImportRows(text: string, hasHeader: boolean): ImportDraft[]
   }
 
   return drafts;
+}
+
+// ==================== 单元格取值（xlsx） ====================
+//
+// Excel 的单元格不是只有字符串。三种形态各自要当心：
+//
+//   1. Date 对象 —— 日期单元格和「纯时间」单元格都是它，含义却完全不同：
+//        日期：2026-11-20T00:00:00Z
+//        时间：1899-12-30T08:50:00Z   ← 日期部分只是 Excel 的纪元哨兵
+//      同一个类型，认错就会把「8:50」导成一个 1899 年的日期。
+//
+//   2. 字符串 —— 用户把列设成「文本」时的原样值。
+//
+//   3. 数字 —— 格式没被识别成日期时的序列号（比如公式 =TIME(8,50,0)）。
+//
+// 所以这里不按「一个格子 = 一段文本」处理，而是按**列的角色**拆出日期和时间。
+
+/**
+ * Excel 纪元哨兵的年份上限。
+ * 纯时间单元格的日期部分落在 1899-12-30（1900 制）或 1904-01-01（1904 制），
+ * 都不是真实日期。这个值以内的年份一律当作「只有时间」。
+ */
+const EXCEL_EPOCH_YEAR_MAX = 1904;
+
+/** 一个单元格里能拆出来的日期与时间 */
+export interface CellParts {
+  /** YYYY-MM-DD；不是日期则为空 */
+  date: string;
+  /** HH:mm；没有时间则为空 */
+  time: string;
+}
+
+const EMPTY_PARTS: CellParts = { date: '', time: '' };
+
+/**
+ * 把一个单元格拆成日期与时间两部分。
+ *
+ * 与 normalizeDate / normalizeTime 的严格度保持一致：
+ * 只认 YYYY-MM-DD 和 HH:mm，不认 2026/11/2 这类写法 ——
+ * 那是「文本」路径的规矩，这里也不放松，避免两条路给出不同答案。
+ */
+export function cellToParts(c: unknown): CellParts {
+  if (c === null || c === undefined) return EMPTY_PARTS;
+
+  // 1. Date：日期与时间都在里面，要分开拿
+  if (c instanceof Date) {
+    const y = c.getUTCFullYear();
+    const m = String(c.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(c.getUTCDate()).padStart(2, '0');
+    const hh = String(c.getUTCHours()).padStart(2, '0');
+    const mi = String(c.getUTCMinutes()).padStart(2, '0');
+
+    // 日期部分在纪元哨兵范围内 → 这是「纯时间」单元格，不是日期
+    const realDate = y > EXCEL_EPOCH_YEAR_MAX ? `${y}-${m}-${d}` : '';
+
+    // 时钟全是 0 → 只有日期没有时间。
+    // 不然「2026/11/20」这个纯日期会被当成「零点的事」，
+    // 记录就从「没时间的」变成「半夜零点的一条」，性质悄悄变了。
+    const hasClock = hh !== '00' || mi !== '00';
+
+    return { date: realDate, time: hasClock ? `${hh}:${mi}` : '' };
+  }
+
+  // 2. 字符串
+  if (typeof c === 'string') {
+    const s = c.trim();
+    if (!s) return EMPTY_PARTS;
+
+    // 日期 + 时间：2026-11-20T08:50:00 或 2026-11-20 08:50
+    const both = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}):(\d{2})/);
+    if (both) {
+      return { date: both[1], time: `${both[2].padStart(2, '0')}:${both[3]}` };
+    }
+    // 只有日期
+    const dateOnly = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (dateOnly) return { date: dateOnly[1], time: '' };
+    // 只有时间
+    const timeOnly = s.match(/^(\d{1,2}):(\d{2})/);
+    if (timeOnly) {
+      return { date: '', time: `${timeOnly[1].padStart(2, '0')}:${timeOnly[2]}` };
+    }
+    return EMPTY_PARTS;
+  }
+
+  // 3. 数字（Excel 序列号）
+  if (typeof c === 'number') {
+    // 0 ≤ v < 1 → 一天里的小数部分 = 纯时间（如 =TIME(8,50,0)）
+    if (c >= 0 && c < 1) {
+      const totalMin = Math.round(c * 24 * 60);
+      const hh = Math.floor(totalMin / 60) % 24;
+      const mi = totalMin % 60;
+      return { date: '', time: `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}` };
+    }
+    // ≥ 1 的数字分不清是日期序列号还是普通数字，不猜。
+    return EMPTY_PARTS;
+  }
+
+  return EMPTY_PARTS;
+}
+
+/**
+ * 单元格值转文本（不区分日期与时间）。
+ *
+ * Excel 里的「真日期」是日期序列号，解析出来是 Date 对象，
+ * 直接 String() 会得到 "Mon Nov 02 2026 ..." 这种乱码，导入必失败。
+ */
+export function cellToText(c: unknown): string {
+  if (c === null || c === undefined) return '';
+  if (c instanceof Date) {
+    // 用 UTC 分量还原：Excel 日期序列号本身不带时区，解析库按 UTC 解释，
+    // 若用本地分量，在负时区会把纯日期偏成前一天。
+    const y = c.getUTCFullYear();
+    const m = String(c.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(c.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  if (typeof c === 'string') {
+    // 兜底：某些解析配置下日期会直接给 ISO 字符串
+    const iso = c.match(/^(\d{4}-\d{2}-\d{2})T/);
+    if (iso) return iso[1];
+  }
+  return String(c);
+}
+
+/**
+ * 把一行 xlsx 单元格转成模板的七列文本。
+ *
+ * 顺序固定：日期,开始时间,结束时间,事项,地点,人员,备注
+ *
+ * 日期列和时间列走 cellToParts（Excel 的「纯时间」单元格也是 Date 对象，
+ * 按文本拍平会把时间整个丢掉）；其余列走 cellToText。
+ */
+export function xlsxRowToTemplateCells(row: unknown[], idx: ColumnMap): string[] {
+  const cells = row.map(c => cellToText(c).trim());
+  const pick = (i: number) => (i >= 0 && i < cells.length ? cells[i] : '');
+  const pickPart = (i: number) =>
+    (i >= 0 && i < row.length ? cellToParts(row[i]) : { date: '', time: '' });
+
+  const datePart = pickPart(idx.date);
+  const timePart = pickPart(idx.time);
+  const endPart = pickPart(idx.endTime);
+
+  const date = datePart.date;
+  let time = timePart.time;
+  const endTime = endPart.time;
+
+  // 一个单元格里同时带日期和时间（「2026/11/20 8:50」），
+  // 而时间列空着 —— 就用同一个单元格里带着的时间。
+  // 这不是猜：值就在那个单元格里，只是被并进了一列。
+  if (!time && datePart.time) time = datePart.time;
+
+  return [date, time, endTime, pick(idx.content), pick(idx.location), pick(idx.people), pick(idx.note)];
 }
 
 /**
