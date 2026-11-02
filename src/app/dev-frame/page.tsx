@@ -151,7 +151,20 @@ export default function DevFrame() {
     fit();
     window.addEventListener('resize', fit);
     const t = setTimeout(fit, 120);
-    return () => { window.removeEventListener('resize', fit); clearTimeout(t); };
+
+    // ResizeObserver —— 关键。
+    // 画布容器的高度要等 iframe 里的内容渲染完才确定，
+    // 只在 mount 和 window resize 时算一次会算出 scale=1
+    //（容器当时还是 0 高度），结果就是「显示 100%」但画面超出一屏。
+    const box = boxRef.current;
+    const ro = box ? new ResizeObserver(fit) : null;
+    if (box && ro) ro.observe(box);
+
+    return () => {
+      window.removeEventListener('resize', fit);
+      clearTimeout(t);
+      ro?.disconnect();
+    };
   }, [w, h, actual]);
 
   if (!dev) {
@@ -163,7 +176,11 @@ export default function DevFrame() {
   }
 
   return (
-    <div className="min-h-screen bg-[#E8E4DF] flex flex-col">
+    // h-screen + overflow-hidden：画布页面自己**不滚动**，
+    // 整台设备必须一屏装得下。
+    // 原来用 min-h-screen，页面可以比视口高 → flex-1 的容器没有高度上限
+    // → 缩放永远算成 100% → 设备超出部分要靠滚动才能看到。
+    <div className="h-screen overflow-hidden bg-[#E8E4DF] flex flex-col">
       {/* 工具条 */}
       <div className="shrink-0 bg-white border-b border-[#D9D4CF] px-3 py-2 flex items-center gap-2 flex-wrap">
         <span className="text-xs font-semibold text-[#1C1C1C]">设备</span>
@@ -226,8 +243,10 @@ export default function DevFrame() {
         </span>
       </div>
 
-      {/* 画布 */}
-      <div ref={boxRef} className={`flex-1 p-2 ${actual ? 'overflow-auto' : 'overflow-hidden'}`}>
+      {/* 画布 —— min-h-0：flex 子项默认 min-height:auto，
+          内容多高它就多高，flex-1 的高度上限就失效了。
+          不加这个，设备画布永远撑破容器。 */}
+      <div ref={boxRef} className={`flex-1 min-h-0 p-2 ${actual ? 'overflow-auto' : 'overflow-hidden'}`}>
         <div
           style={{
             width: w * scale,
