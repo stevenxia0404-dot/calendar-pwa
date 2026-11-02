@@ -810,7 +810,9 @@ export default function Home() {
       return;
     }
 
-    const firstLine = importText.replace(/^﻿/, '').split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
+    // 首行保持原样（不 trim）—— 分隔符是逗号还是制表符，要靠它判断。
+    // trim 掉末尾的制表符会吃掉最后一个空列。
+    const firstLine = importText.replace(/^﻿/, '').split('\n').filter(l => l.trim())[0] || '';
     const drafts = parseImportRows(importText, looksLikeHeader(firstLine));
 
     if (drafts.length === 0) { alert('未识别到有效数据'); return; }
@@ -1229,7 +1231,7 @@ export default function Home() {
                   <button onClick={() => setShowImportModal(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center">&times;</button>
                 </div>
                 <div className="p-5 space-y-4 flex-1 flex flex-col min-h-0">
-                  <p className="text-xs text-[#A0A0A0]">每行一条，格式：日期,开始时间,结束时间,事项,地点,人员,备注（无时间的自动归为任务）</p>
+                  <p className="text-xs text-[#A0A0A0]">每行一条，格式：日期,开始时间,结束时间,事项,地点,人员,备注（无时间的自动归为任务）。也可以直接粘贴 Excel 里复制的表格</p>
                   <textarea value={importText} onChange={e => setImportText(e.target.value)}
                     placeholder={`日期,开始时间,结束时间,事项,地点,人员,备注\n2026-11-02,08:50,10:30,初始训练-模拟航班,青浦B777经济静态舱,张教员\n2026-11-03,12:50,,团队周会,C楼201,全组\n2026-11-04,,,整理培训材料,,,培训材料归档`}
                     className="flex-1 w-full p-3 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C] resize-none font-mono" />

@@ -8,8 +8,15 @@
 //
 // 「猜」这件事为什么必须删：Excel 里写好的时间本来是对的，
 // 标题里出现「3点」就把它覆盖掉，是用不确定去覆盖确定。
+//
+// 「不猜」的边界在哪（这一条容易搞混）：
+//   **认写法** 不算猜 ——「2026/11/20」和「2026-11-20」指的是同一天，
+//   都把年份和月日写明了，没有不确定。写法宽松一点，人少填一次。
+//   **认不出** 才算猜 ——「11月2日」不知道是哪一年，「下周二」不知道是哪天，
+//   「下午3点」不知道几点。这些一律不认，留空让用户在预览里补。
+//   所以规则是：**年份必须明确，写法可以不同。**
 
-import { parseCsvLine } from './csv.ts';
+import { parseCsvLine, detectDelimiter } from './csv.ts';
 
 export interface ImportDraft {
   /** 绝对日期 YYYY-MM-DD；文件里没写或格式不对则为空，等用户补 */
@@ -27,24 +34,88 @@ export interface ImportDraft {
   type: 'event' | 'task';
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_RE = /^\d{1,2}:\d{2}$/;
+// ==================== 日期与时间的解析 ====================
+//
+// 所有入口（xlsx 单元格、粘贴的文本、CSV 单元格）都走这一套，
+// 免得出现「同一天，xlsx 里认得、粘贴时不认」这种割裂。
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/**
+ * 日期写法：年份必须明确，分隔符可以不同。
+ *   2026-11-20   2026/11/20   2026/11/2   2026.11.20   2026年11月20日
+ */
+function parseDateParts(s: string): { y: number; m: number; d: number } | null {
+  const t = s.trim();
+
+  // 分隔符写法：年-月-日 / 年/月/日 / 年.月.日
+  const a = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (a) return { y: +a[1], m: +a[2], d: +a[3] };
+
+  // 中文写法：2026年11月20日
+  const b = t.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  if (b) return { y: +b[1], m: +b[2], d: +b[3] };
+
+  // 没有年份一律不认 —— 那是猜（「11月2日」是哪一年？）
+  return null;
+}
+
+/** 真实存在的日期才给（2026-02-30 这种要挡掉） */
+function formatDate(p: { y: number; m: number; d: number }): string {
+  if (p.m < 1 || p.m > 12 || p.d < 1 || p.d > 31) return '';
+
+  // 先用 2000 年构造再改年份 —— 直接 Date.UTC(y, ...) 会把 0~99 的年份
+  // 当成 1900+year（JS 的历史包袱）。
+  const dt = new Date(Date.UTC(2000, p.m - 1, p.d));
+  dt.setUTCFullYear(p.y);
+  if (dt.getUTCFullYear() !== p.y || dt.getUTCMonth() !== p.m - 1 || dt.getUTCDate() !== p.d) {
+    return '';  // 2026-02-30 这种不存在的日期
+  }
+
+  return `${p.y}-${pad2(p.m)}-${pad2(p.d)}`;
+}
+
+/** 时间：8:50 → 08:50；25:00 这种不存在的时刻不认 */
+function parseClock(s: string): string {
+  const m = s.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return '';
+  const h = +m[1];
+  const mi = +m[2];
+  if (h > 23 || mi > 59) return '';
+  return `${pad2(h)}:${pad2(mi)}`;
+}
+
+/**
+ * 把一段文本拆成「日期部分」和「时间部分」。
+ *
+ * 「2026/11/20 08:50」这种一个格里带日期又带时间的，
+ * 拆成两半，两列各取各的 —— 值就在那格里，不该丢掉一半。
+ */
+function splitDateTime(s: string): { dateText: string; timeText: string } {
+  const tm = s.match(/(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (tm && tm.index !== undefined) {
+    // ISO 写法「2026-11-20T08:50:00」里的 T 要去掉，剩下才是日期
+    const dateText = s.slice(0, tm.index).trim().replace(/T$/, '');
+    return { dateText, timeText: tm[0] };
+  }
+  return { dateText: s.trim(), timeText: '' };
+}
 
 /** 归一化时间：9:5 → 09:05；不是时间就返回空 */
 export function normalizeTime(v: string): string {
-  const s = (v || '').trim();
-  if (!TIME_RE.test(s)) return '';
-  const [h, m] = s.split(':');
-  const hh = parseInt(h, 10);
-  const mm = parseInt(m, 10);
-  if (hh > 23 || mm > 59) return '';
-  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  return cellToParts(v).time;
 }
 
-/** 归一化日期：只认 YYYY-MM-DD；其它格式（2026/11/2、11月2日）不猜 */
+/**
+ * 归一化日期 → YYYY-MM-DD。
+ *
+ * 认：2026-11-20 / 2026/11/20 / 2026/11/2 / 2026.11.20 / 2026年11月20日
+ * 不认：11月2日（没年份）、下周二（相对词）、2026-02-30（不存在的日期）
+ */
 export function normalizeDate(v: string): string {
-  const s = (v || '').trim();
-  return DATE_RE.test(s) ? s : '';
+  return cellToParts(v).date;
 }
 
 /** 表头 → 列下标的映射 */
@@ -90,26 +161,32 @@ export function mapColumns(header: string[]): ColumnMap {
 /**
  * 解析文本为导入草稿。
  *
- * @param text       CSV 文本（可有可无表头）
+ * @param text       CSV 文本，或从 Excel 复制来的制表符分隔文本
  * @param hasHeader  第一行是不是表头
  */
 export function parseImportRows(text: string, hasHeader: boolean): ImportDraft[] {
-  const lines = (text || '').replace(/^﻿/, '').split('\n').map(l => l.trim()).filter(Boolean);
+  // 不整行 trim —— 制表符分隔的行末尾常有一个空列（备注列），
+  // trim 掉末尾的制表符会把那一列吃掉，列数对不上。
+  // 单元格级别的空白由 parseCsvLine 负责 trim。
+  const lines = (text || '').replace(/^﻿/, '').split('\n').filter(l => l.trim());
   if (!lines.length) return [];
+
+  // 分隔符：逗号（CSV）还是制表符（从 Excel 复制出来的）
+  const delimiter = detectDelimiter(lines[0]);
 
   // 表头存在时按表头映射列，否则按标准七列的位置
   let idx = { date: 0, time: 1, endTime: 2, content: 3, location: 4, people: 5, note: 6 };
   let start = 0;
 
   if (hasHeader) {
-    idx = mapColumns(parseCsvLine(lines[0]));
+    idx = mapColumns(parseCsvLine(lines[0], delimiter));
     start = 1;
   }
 
   const drafts: ImportDraft[] = [];
 
   for (let i = start; i < lines.length; i++) {
-    const cells = parseCsvLine(lines[i]);
+    const cells = parseCsvLine(lines[i], delimiter);
     const pick = (n: number) => (n >= 0 && n < cells.length ? (cells[n] || '').trim() : '');
 
     const date = normalizeDate(pick(idx.date));
@@ -175,9 +252,8 @@ const EMPTY_PARTS: CellParts = { date: '', time: '' };
 /**
  * 把一个单元格拆成日期与时间两部分。
  *
- * 与 normalizeDate / normalizeTime 的严格度保持一致：
- * 只认 YYYY-MM-DD 和 HH:mm，不认 2026/11/2 这类写法 ——
- * 那是「文本」路径的规矩，这里也不放松，避免两条路给出不同答案。
+ * 与 normalizeDate / normalizeTime 是同一套规则（它们就是调用本函数），
+ * 所以 xlsx 路径和文本路径不会给出不同答案。
  */
 export function cellToParts(c: unknown): CellParts {
   if (c === null || c === undefined) return EMPTY_PARTS;
@@ -206,20 +282,14 @@ export function cellToParts(c: unknown): CellParts {
     const s = c.trim();
     if (!s) return EMPTY_PARTS;
 
-    // 日期 + 时间：2026-11-20T08:50:00 或 2026-11-20 08:50
-    const both = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}):(\d{2})/);
-    if (both) {
-      return { date: both[1], time: `${both[2].padStart(2, '0')}:${both[3]}` };
-    }
-    // 只有日期
-    const dateOnly = s.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (dateOnly) return { date: dateOnly[1], time: '' };
-    // 只有时间
-    const timeOnly = s.match(/^(\d{1,2}):(\d{2})/);
-    if (timeOnly) {
-      return { date: '', time: `${timeOnly[1].padStart(2, '0')}:${timeOnly[2]}` };
-    }
-    return EMPTY_PARTS;
+    // 一个格里可能同时有日期和时间（「2026/11/20 08:50」），拆成两半
+    const { dateText, timeText } = splitDateTime(s);
+    const dp = parseDateParts(dateText);
+    const t = parseClock(timeText);
+    return {
+      date: dp ? formatDate(dp) : '',
+      time: t,
+    };
   }
 
   // 3. 数字（Excel 序列号）
@@ -304,7 +374,7 @@ export function xlsxRowToTemplateCells(row: unknown[], idx: ColumnMap): string[]
  */
 export function looksLikeHeader(firstLine: string): boolean {
   if (!firstLine) return false;
-  const cells = parseCsvLine(firstLine);
+  const cells = parseCsvLine(firstLine, detectDelimiter(firstLine));
   const names = ['日期', '时间', '事项', '内容', '地点', '人员', '备注', '结束时间', '标题', '日程'];
   const hit = cells.some(c => names.some(n => c.includes(n)));
   if (!hit) return false;

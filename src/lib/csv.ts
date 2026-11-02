@@ -17,11 +17,44 @@ export function escapeCsvField(value: string): string {
 }
 
 /**
- * 解析一行 CSV（用于读回）。
+ * 判断一行用的是什么分隔符。
  *
- * 双引号包起来的字段里，逗号不算分隔符；两个连续的双引号表示一个引号。
+ * 数引号外的逗号和制表符，谁多算谁的。
+ *
+ * 为什么要有这个：从 Excel 里复制一段区域到剪贴板，粘出来是
+ * **制表符**分隔的（不是逗号）。不判断的话整行会被当成一格，
+ * 后面所有列全部对不上 —— 而且不报错，只是「未识别到有效数据」。
+ *
+ * 顺带一提，Excel 复制时对含制表符/换行/引号的单元格也是用双引号包起来、
+ * 内部引号写两遍，跟 CSV 一套规矩，所以能共用同一个解析器。
  */
-export function parseCsvLine(line: string): string[] {
+export function detectDelimiter(line: string): string {
+  let commas = 0;
+  let tabs = 0;
+  let inQuote = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      // 一对双引号是转义，跳过
+      if (inQuote && line[i + 1] === '"') { i++; continue; }
+      inQuote = !inQuote;
+      continue;
+    }
+    if (inQuote) continue;
+    if (ch === ',') commas++;
+    else if (ch === '\t') tabs++;
+  }
+
+  return tabs > commas ? '\t' : ',';
+}
+
+/**
+ * 解析一行（默认逗号分隔；Excel 复制过来的是制表符分隔）。
+ *
+ * 双引号包起来的字段里，分隔符不算分隔符；两个连续的双引号表示一个引号。
+ */
+export function parseCsvLine(line: string, delimiter = ','): string[] {
   const cells: string[] = [];
   let cur = '';
   let inQuote = false;
@@ -37,7 +70,7 @@ export function parseCsvLine(line: string): string[] {
       }
     } else if (ch === '"') {
       inQuote = true;
-    } else if (ch === ',') {
+    } else if (ch === delimiter) {
       cells.push(cur.trim());
       cur = '';
     } else {

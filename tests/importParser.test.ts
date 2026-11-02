@@ -14,7 +14,7 @@ import {
   cellToText,
   xlsxRowToTemplateCells,
 } from '../src/lib/importParser.ts';
-import { parseCsvLine, escapeCsvField, toCsvLine } from '../src/lib/csv.ts';
+import { parseCsvLine, escapeCsvField, toCsvLine, detectDelimiter } from '../src/lib/csv.ts';
 
 describe('CSV 原语', () => {
   test('普通行按逗号切分', () => {
@@ -42,13 +42,31 @@ describe('CSV 原语', () => {
   });
 });
 
-describe('值归一化 —— 只认标准格式，不猜', () => {
-  test('日期只认 YYYY-MM-DD', () => {
+describe('值归一化 —— 年份必须明确，写法可以不同', () => {
+  test('日期认得各种写法，都归到 YYYY-MM-DD', () => {
     assert.equal(normalizeDate('2026-11-02'), '2026-11-02');
-    assert.equal(normalizeDate('2026/11/02'), '');
+    assert.equal(normalizeDate('2026/11/02'), '2026-11-02');
+    assert.equal(normalizeDate('2026/11/2'), '2026-11-02');
+    assert.equal(normalizeDate('2026.11.02'), '2026-11-02');
+    assert.equal(normalizeDate('2026年11月2日'), '2026-11-02');
+    assert.equal(normalizeDate('2026年11月02日'), '2026-11-02');
+  });
+
+  test('没有年份不认 —— 那是猜', () => {
     assert.equal(normalizeDate('11月2日'), '');
+    assert.equal(normalizeDate('11/2'), '');
+  });
+
+  test('相对词不认 —— 那是猜', () => {
     assert.equal(normalizeDate('下周二'), '');
-    assert.equal(normalizeDate(''), '');
+    assert.equal(normalizeDate('明天'), '');
+    assert.equal(normalizeDate('后天'), '');
+  });
+
+  test('不存在的日期不认', () => {
+    assert.equal(normalizeDate('2026-02-30'), '');
+    assert.equal(normalizeDate('2026-13-01'), '');
+    assert.equal(normalizeDate('2026/00/10'), '');
   });
 
   test('时间认 H:mm 与 HH:mm，其它不认', () => {
@@ -56,7 +74,58 @@ describe('值归一化 —— 只认标准格式，不猜', () => {
     assert.equal(normalizeTime('8:50'), '08:50');
     assert.equal(normalizeTime('下午3点'), '');
     assert.equal(normalizeTime('25:00'), '');
+    assert.equal(normalizeTime('08:70'), '');
     assert.equal(normalizeTime(''), '');
+  });
+
+  test('一个格里既有日期又有时间 → 两边都拆出来', () => {
+    assert.equal(normalizeDate('2026/11/20 08:50'), '2026-11-20');
+    assert.equal(normalizeTime('2026/11/20 08:50'), '08:50');
+    assert.equal(normalizeDate('2026-11-20T08:50:00'), '2026-11-20');
+    assert.equal(normalizeTime('2026-11-20T08:50:00'), '08:50');
+  });
+});
+
+describe('分隔符 —— 从 Excel 复制过来的是制表符', () => {
+  test('逗号和制表符都能认', () => {
+    assert.equal(detectDelimiter('a,b,c'), ',');
+    assert.equal(detectDelimiter('a\tb\tc'), '\t');
+    // 引号里的不算
+    assert.equal(detectDelimiter('"a\tb",c,d'), ',');
+  });
+
+  test('制表符分隔的整块文本能解析', () => {
+    // 从 Excel 复制一片区域到剪贴板，粘出来长这样
+    const text = '日期\t开始时间\t结束时间\t事项\t地点\t人员\t备注\n'
+      + '2026/11/20\t8:50\t10:30\t初始训练\t青浦B777\t张教员\n'
+      + '2026/11/21\t12:50\t13:50\t团队周会\tC楼201\t全组';
+    const rows = parseImportRows(text, true);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].date, '2026-11-20');
+    assert.equal(rows[0].time, '08:50');
+    assert.equal(rows[0].endTime, '10:30');
+    assert.equal(rows[0].title, '初始训练');
+    assert.equal(rows[0].location, '青浦B777');
+    assert.equal(rows[0].people, '张教员');
+    assert.equal(rows[1].date, '2026-11-21');
+    assert.equal(rows[1].time, '12:50');
+  });
+
+  test('制表符行末尾的空列不能被吃掉', () => {
+    // 备注列是空的 —— 整行 trim 会把末尾的制表符连同那一列一起吃掉
+    const text = '日期\t事项\t备注\n2026/11/20\t整理文档\t';
+    const rows = parseImportRows(text, true);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].date, '2026-11-20');
+    assert.equal(rows[0].title, '整理文档');
+    assert.equal(rows[0].raw, '整理文档', '备注为空时原话退回用事项');
+  });
+
+  test('逗号分隔的老路没变', () => {
+    const rows = parseImportRows('日期,开始时间,事项\n2026-11-02,08:50,初始训练', true);
+    assert.equal(rows[0].date, '2026-11-02');
+    assert.equal(rows[0].time, '08:50');
+    assert.equal(rows[0].title, '初始训练');
   });
 });
 
@@ -137,8 +206,11 @@ describe('行解析 —— 核心是「不猜」', () => {
   });
 
   test('日期格式不对 → 留空等人补，不落今天', () => {
-    const rows = parseImportRows('日期,事项\n2026/11/02,初始训练', true);
-    assert.equal(rows[0].date, '');
+    // 「下周二」这种相对词不认（要猜），但年份明确的写法认
+    assert.equal(parseImportRows('日期,事项\n下周二,初始训练', true)[0].date, '');
+    assert.equal(parseImportRows('日期,事项\n2026/11/02,初始训练', true)[0].date, '2026-11-02');
+    // 确实不存在的日期也不认
+    assert.equal(parseImportRows('日期,事项\n2026-02-30,初始训练', true)[0].date, '');
   });
 
   test('没有时间 → 归为待办', () => {
@@ -251,8 +323,13 @@ describe('cellToParts —— 把单元格里的日期与时间拆出来', () => 
     assert.deepEqual(cellToParts('2026-11-20T08:50:00'), { date: '2026-11-20', time: '08:50' });
   });
 
-  test('斜杠写法不认 —— 跟文本路径保持一致', () => {
-    assert.deepEqual(cellToParts('2026/11/20'), { date: '', time: '' });
+  test('斜杠写法认得 —— 写法不同但年份明确，不是猜', () => {
+    assert.deepEqual(cellToParts('2026/11/20'), { date: '2026-11-20', time: '' });
+  });
+
+  test('相对词仍不认 —— 那才是猜', () => {
+    assert.deepEqual(cellToParts('下周二'), { date: '', time: '' });
+    assert.deepEqual(cellToParts('11月2日'), { date: '', time: '' });
   });
 
   test('数字序列号：一天的小数部分 = 纯时间', () => {
