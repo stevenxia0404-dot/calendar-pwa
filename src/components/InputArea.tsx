@@ -66,14 +66,8 @@ export interface InputAreaProps {
   token: string | null;
   /** 一句话进来 → 返回解析结果与原话 */
   onSubmit: (parsed: ParsedResult) => void;
-  /** 同步状态 */
-  syncState: 'syncing' | 'synced' | 'offline';
-  /** 队列里还有几条没传上去 */
-  pendingCount?: number;
   /** 窄屏 */
   isNarrow: boolean;
-  /** 点「去激活」→ 打开激活弹窗 */
-  onActivate?: () => void;
 }
 
 /** 手指上滑多少算「进取消区」 */
@@ -82,7 +76,7 @@ const CANCEL_THRESHOLD_PX = 56;
 const HOLD_THRESHOLD_MS = 250;
 
 export default function InputArea({
-  apiBase, token, onSubmit, syncState, pendingCount = 0, isNarrow, onActivate,
+  apiBase, token, onSubmit, isNarrow,
 }: InputAreaProps) {
   const [text, setText] = useState('');
   const [notice, setNotice] = useState('');
@@ -259,28 +253,10 @@ export default function InputArea({
   };
 
   // ==================== 同步状态 ====================
-
-  // 队列非空时把条数显示出来 —— 「离线待同步」这四个字
-  // 让人知道东西还在，但不知道有多少、是不是真在等。
   //
-  // 没激活时不能说「已同步」—— 根本没同步过。
-  // 绿点 + 已同步 会让人以为东西在云端，换台设备却看不到。
-  const syncLabel = !token
-    ? '未激活 · 只在这台设备'
-    : pendingCount > 0
-    ? `${syncState === 'offline' ? '离线待同步' : '待同步'} ${pendingCount}`
-    : {
-        syncing: '同步中',
-        synced: '已同步',
-        offline: '离线待同步',
-      }[syncState];
-  const syncColor = !token
-    ? 'bg-[#D9D4CF]'
-    : {
-        syncing: 'bg-[#ED6A3B]',
-        synced: 'bg-[#059669]',
-        offline: 'bg-[#D9D4CF]',
-      }[syncState];
+  // 底部原来有一行「● 已同步」，现在删了 ——
+  // 顶栏右上角已经有那个同步点，底部再来一遍是重复，
+  // 而且它把壁纸挡掉一条。未激活的提示也移到了设置卡片里。
 
   return (
     <>
@@ -297,24 +273,6 @@ export default function InputArea({
         // 它是「当前编辑目标」的输入框，浮层打开时依然能用。
         className="fixed bottom-0 left-0 right-0 z-[100] shrink-0 pb-[var(--sab)]"
       >
-        {/* 未激活提示 —— 这是最容易被忽略、后果最重的一种状态：
-            没激活时记下的事只在这台设备上，换台设备看不见。
-            顶栏那个小圆点太不起眼，用户会以为一切正常，
-            直到发现「手机上看不到」才发现问题。这里给一句明话。
-
-            做成一行小字而不是一块横幅：横幅太占地方，
-            而输入区是 fixed 钉在底部的，一块横幅就把壁纸挡掉一大片。 */}
-        {!token && (
-          <div className="px-4 pt-2">
-            <button
-              onClick={onActivate}
-              className="w-full flex items-center justify-between gap-3 text-left text-[11px] text-[#8A6D3B] hover:text-[#B8860B] transition-colors"
-            >
-              <span className="min-w-0 truncate">未激活 · 只在这台设备</span>
-              <span className="shrink-0 font-medium">去激活 →</span>
-            </button>
-          </div>
-        )}
 
         {/* 平台级限制提示 —— 语音是这个产品的核心，
             但 iOS 上只有 Safari 能用麦克风。与其让人点了才知道，
@@ -400,15 +358,10 @@ export default function InputArea({
             </div>
           )}
 
-          {/* 同步状态 —— 常驻，不需要点进去看。语音态时收起（胶囊里空间紧张）。
-              颜色要够深：半透明卡片 + 浅色壁纸的背景下，
-              #A0A0A0 的浅灰几乎看不见。 */}
-          {!voiceMode && (
-            <div className="flex items-center gap-1.5 mt-1.5 px-2">
-              <span className={`w-1.5 h-1.5 rounded-full ${syncColor} ${syncState === 'syncing' ? 'animate-pulse' : ''}`} />
-              <span className="text-[10px] text-[#6B6B6B]">{syncLabel}</span>
-            </div>
-          )}
+          {/* 同步状态行 —— 删掉了。
+              顶栏右上角已经有那个同步点（绿/橙/灰 + 悬停看详情），
+              底部再来一遍「● 已同步」是重复的，而且它把壁纸挡掉一条。
+              未激活的提示也移到了设置卡片里（顶栏齿轮 → 激活同步）。 */}
         </div>
       </div>
     </>

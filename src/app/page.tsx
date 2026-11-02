@@ -929,10 +929,11 @@ export default function Home() {
   // ==================== UI ====================
 
   return (
-    // 底部不留 pb：输入区是 fixed 钉在屏幕底部的，
-    // 文档流里由 InputArea 自己的占位块让出等高空间。
-    // 内容区不再实底 —— 壁纸要透出来，栏目浮在它上面。
-    <main className="min-h-screen flex flex-col">
+    // h-screen：整个页面锁定一屏高，不滚动。
+    // 月历卡片靠 flex-1 撑满剩余高度 —— 这样屏幕下半部分被卡片占住，
+    // 壁纸不会空出一大块。
+    // 输入区是 fixed 钉在底部的，文档流里由 InputArea 的占位块让出空间。
+    <main className="h-screen flex flex-col overflow-hidden">
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>
@@ -1369,7 +1370,10 @@ export default function Home() {
 
       {/* 内容区：月历卡片 + 四宫格。
           桌面端跟移动端一样 —— 不再「左周视图 + 右明细卡」并排。
-          月历在宽屏上格子更大，看得更清楚；明细改成点日期后弹浮层。 */}
+          月历在宽屏上格子更大，看得更清楚；明细改成点日期后弹浮层。
+
+          min-h-0：flex 子项默认 min-height:auto，
+          不加的话月历的 flex-1 撑不开，四宫格会把整页顶出视口。 */}
       <div className="flex-1 flex flex-col gap-2.5 mx-3 mt-3 pb-2 min-h-0">
 
         <MonthView
@@ -1470,10 +1474,7 @@ export default function Home() {
         apiBase={API_BASE}
         token={token}
         onSubmit={handleParsed}
-        syncState={syncState}
-        pendingCount={pendingCount}
         isNarrow={isNarrow}
-        onActivate={() => setShowActivate(true)}
       />
 
       {/* 开发期标注器 —— 只在 next dev 出现，生产构建整块不渲染。

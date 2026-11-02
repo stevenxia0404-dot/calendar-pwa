@@ -54,8 +54,11 @@ export default function MonthView({
 
   return (
     <>
-      {/* ==================== 月历卡片 ==================== */}
-      <div className="card-glass rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-3 pt-2.5 pb-2.5">
+      {/* ==================== 月历卡片 ====================
+          flex-1：卡片自己撑满剩余高度。
+          下面四宫格是固定高度的，所以月历有多余空间就往下长 ——
+          这样屏幕下半部分不会被壁纸空着。 */}
+      <div className="card-glass flex-1 min-h-0 rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-3 pt-2.5 pb-2.5 flex flex-col">
         {/* 标题行：左「十一月」，中间翻月箭头，右年份 */}
         <div className="flex items-center justify-between px-1 mb-1">
           <div className="flex items-center gap-1">
@@ -81,26 +84,30 @@ export default function MonthView({
           ))}
         </div>
 
-        {/* 日期网格 */}
-        <div className="grid grid-cols-7 gap-1">
+        {/* 日期网格 —— flex-1 让 6 行平分卡片剩余高度。
+            格子高度跟着变，所以下面的空白被吃掉，壁纸不会空一大块。
+            overflow-hidden：空间不够时宁可裁掉一点，也不能把卡片撑破。 */}
+        <div className="grid grid-cols-7 gap-1 flex-1 min-h-0 overflow-hidden">
           {grid.cells.map((cell, i) => (
             <MonthCellView key={i} cell={cell} onClick={onDateClick} />
           ))}
         </div>
       </div>
 
-      {/* ==================== 四宫格 ==================== */}
-      <div className="grid grid-cols-2 gap-2.5">
+      {/* ==================== 四宫格 ====================
+          aspect-[3/2]：每块宽:高 = 3:2。
+          4:3 在手机上太夸张（单块 187×140，两排加起来 290px，
+          会把月历压得只剩 4 行），3:2 是「明显加大但不挤」的平衡点。
+          shrink-0：高度固定，不跟月历抢空间。 */}
+      <div className="grid grid-cols-2 gap-2.5 shrink-0">
         {statItems.map(s => (
           <button
             key={s.kind}
             onClick={() => onStatClick?.(s.kind)}
-            className="card-glass rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-3.5 py-3 text-left transition-all hover:bg-white/80 active:scale-[0.98]"
+            className="card-glass aspect-[3/2] rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-3.5 py-3 flex flex-col justify-between text-left transition-all hover:bg-white/75 active:scale-[0.98]"
           >
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-xs text-[#A0A0A0]">{s.label}</span>
-              <span className="text-2xl font-medium tabular-nums" style={{ color: s.color }}>{s.n}</span>
-            </div>
+            <span className="text-xs text-[#A0A0A0]">{s.label}</span>
+            <span className="text-3xl font-medium tabular-nums self-end leading-none" style={{ color: s.color }}>{s.n}</span>
           </button>
         ))}
       </div>
@@ -119,7 +126,7 @@ function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: st
     <button
       onClick={() => cell.date && onClick?.(cell.date)}
       disabled={!cell.date}
-      className={`relative flex flex-col items-center rounded-lg py-0.5 min-h-[36px] transition-colors ${
+      className={`relative flex flex-col items-center justify-start rounded-lg py-1 h-full transition-colors ${
         cell.inMonth ? 'hover:bg-white/60' : ''
       }`}
       aria-label={cell.date ? `${cell.date}` : undefined}
@@ -130,13 +137,13 @@ function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: st
       {isToday && (
         <span
           aria-hidden="true"
-          className="absolute left-1/2 -translate-x-1/2 top-0.5 w-[19px] h-[19px] rounded-full bg-[#ED6A3B] shadow-[0_1px_4px_rgba(237,106,59,0.35)]"
+          className="absolute left-1/2 -translate-x-1/2 top-1 w-[21px] h-[21px] rounded-full bg-[#ED6A3B] shadow-[0_1px_4px_rgba(237,106,59,0.35)]"
         />
       )}
 
       {/* 日期数字 */}
       <span
-        className={`relative z-10 text-[11px] leading-5 tabular-nums ${
+        className={`relative z-10 text-[12px] leading-6 tabular-nums ${
           !cell.inMonth ? 'text-[#C0BDB8]' : isToday ? 'text-white font-medium' : 'text-[#1C1C1C]'
         }`}
       >
@@ -146,17 +153,17 @@ function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: st
       {/* 事件横线 —— 一件事一条，按类型分颜色。
           最多画 4 条：格子高度有限，再多就挤到下一行去了。
           超过 4 条显示 +N。 */}
-      <span className="flex flex-col items-center gap-[1.5px] mt-[1px] w-full px-[3px]">
+      <span className="flex flex-col items-center gap-[2px] mt-[2px] w-full px-[3px]">
         {cell.lines.slice(0, 4).map(l => (
           <span
             key={l.id}
-            className="block w-full max-w-[26px] h-[2px] rounded-full"
+            className="block w-full max-w-[26px] h-[2.5px] rounded-full"
             style={{ background: lineColor(l.type, l.completed) }}
             title={l.title}
           />
         ))}
         {cell.lines.length > 4 && (
-          <span className="text-[8px] text-[#A0A0A0] leading-none">+{cell.lines.length - 4}</span>
+          <span className="text-[9px] text-[#A0A0A0] leading-none">+{cell.lines.length - 4}</span>
         )}
       </span>
     </button>
