@@ -920,8 +920,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="bg-white px-5 py-4 sm:py-5 sticky top-0 z-50 border-b border-[#E8E4DF]">
+      {/* Header —— pt 要加上顶部安全区：
+          加到桌面（standalone）打开时，iPhone 的状态栏是盖在内容上的，
+          不留这一块，顶栏的标题和按钮会被状态栏压住。 */}
+      <header className="bg-white px-5 pt-[calc(var(--sat)+1rem)] pb-4 sm:pt-[calc(var(--sat)+1.25rem)] sm:pb-5 sticky top-0 z-50 border-b border-[#E8E4DF]">
         <div className="flex flex-wrap justify-between items-center gap-y-2 max-w-full mx-auto">
           <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight shrink-0">
             <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程

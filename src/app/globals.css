@@ -13,6 +13,11 @@
         iframe 里 env(safe-area-inset-bottom) 恒为 0，
         覆盖这个变量就能模拟出「真 iPhone 上底部留 34px」的效果。 */
   --sab: env(safe-area-inset-bottom, 0px);
+
+  /* 顶部安全区（状态栏）。
+     加到桌面（standalone）打开时，iPhone 的状态栏是**盖在内容上**的，
+     不留这一块的话顶栏（标题 + 导出/导入/激活）会被状态栏压住。 */
+  --sat: env(safe-area-inset-top, 0px);
 }
 
 @media (prefers-color-scheme: dark) {
