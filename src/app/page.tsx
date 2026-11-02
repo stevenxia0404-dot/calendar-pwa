@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Download, LogOut, Mail, RefreshCw, Upload } from 'lucide-react';
+import { RefreshCw, Upload } from 'lucide-react';
 import {
   enqueueOp, removeOp, pendingIds, readQueue, writeQueue, clearQueue, reconcile,
 } from '@/lib/syncQueue';
@@ -16,11 +16,14 @@ import { toCsvLine } from '@/lib/csv';
 import { newId } from '@/lib/id';
 
 
-import WeekView from '@/components/WeekView';
+import MonthView from '@/components/MonthView';
+import DayCard from '@/components/DayCard';
+import StatCard from '@/components/StatCard';
+import SettingsCard from '@/components/SettingsCard';
 import InputArea from '@/components/InputArea';
 import Inspector from '@/components/Inspector';
 import { ParsedResult } from '@/lib/dateParser';
-import { toDateString as weekToDateString, weekDates } from '@/lib/weekLogic';
+import type { ScheduleEvent } from '@/lib/scheduleTypes';
 
 // ==================== 配置 ====================
 
@@ -122,26 +125,6 @@ async function api<T = Record<string, unknown>>(
 
 // ==================== 类型 ====================
 
-interface ScheduleEvent {
-  id: string;
-  title: string;
-  date: string;
-  time: string;
-  endTime: string;
-  location: string;
-  people: string;
-  raw: string;
-  updatedAt: number;
-  type: 'event' | 'task';
-  completed: boolean;
-  /** 0 = 规则没解出日期，待用户确认；1 = 已确认 */
-  dateConfirmed?: 0 | 1;
-  /** 这条已经同步到服务端了。
-   *  没同步过的本地记录不能被删除对账清掉 ——
-   *  否则未登录时记的东西，一登录就没了。 */
-  synced?: boolean;
-}
-
 interface User { id: number; email: string; role?: 'family' | 'user'; }
 
 /** 服务端返回的原始记录形态（下划线命名，与库里字段一致） */
@@ -170,9 +153,22 @@ export default function Home() {
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ title: '', date: '', time: '', endTime: '', location: '', people: '' });
 
-  // v4.0：周视图锚点（周内任意一天即可）与窄屏判定
-  const [weekAnchor, setWeekAnchor] = useState(new Date());
+  // v4.1：月历锚点（当前显示哪个月）与窄屏判定
+  const [monthAnchor, setMonthAnchor] = useState(new Date());
   const [isNarrow, setIsNarrow] = useState(false);
+
+  // v4.1：三个浮层
+  //   showDayCard  点日历某天 → 那天的明细卡片
+  //   showStatCard 点四宫格某格 → 该类别的清单卡片
+  //   showSettings 点设置齿轮 → 设置卡片
+  // 下面全部模糊（行为层实现），输入框永远在最上层。
+  const [showDayCard, setShowDayCard] = useState(false);
+  const [showStatCard, setShowStatCard] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  /** 四宫格点的是哪一类 */
+  const [statKind, setStatKind] = useState<'event' | 'task' | 'project' | 'completed'>('event');
+  /** 在四宫格卡里点了「＋」—— 下面输入框加的内容归到那一类 */
+  const [statAdding, setStatAdding] = useState(false);
 
   // 认证状态
   const [user, setUser] = useState<User | null>(null);
@@ -243,6 +239,17 @@ export default function Home() {
 
   // ==================== 初始化 ====================
 
+  // 「已从 localStorage 读完」标志。
+  //
+  // 为什么必须有它：读（effect#1）和写（effect#2）是两个 effect，
+  // 而 setEvents 是**异步**的 —— effect#2 第一次跑的时候 events 还是初始的 []，
+  // 于是「刚读出来的数据」被「空数组」覆盖掉了。
+  // 生产环境侥幸没事（第二次渲染会写回正确值），
+  // 但 StrictMode 下 effect 跑两次 —— 数据直接没了。
+  //
+  // 标志位保证：初始化完成之前不写，读到的东西不会被覆盖。
+  const [hydrated, setHydrated] = useState(false);
+
   useEffect(() => {
     const saved = localStorage.getItem('schedule_events');
     if (saved) { try { setEvents(JSON.parse(saved)); } catch { /* ignore */ } }
@@ -252,11 +259,15 @@ export default function Home() {
 
     const savedGroups = localStorage.getItem('schedule_import_groups');
     if (savedGroups) { try { setImportGroups(JSON.parse(savedGroups)); } catch { /* ignore */ } }
+
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
+    // 没读完之前不写 —— 否则空数组会把刚读出来的数据冲掉
+    if (!hydrated) return;
     localStorage.setItem('schedule_events', JSON.stringify(events));
-  }, [events]);
+  }, [events, hydrated]);
 
   // 自动验证 token
   useEffect(() => {
@@ -591,18 +602,38 @@ export default function Home() {
 
   // 解析结果 → 一条记录。规则解不出日期时落今天并标待确认，
   // 原话完整保留，用户扫一眼改掉即可（必须可修正，而非必须成功）。
+  //
+  // 关键：**去哪儿**由「当前编辑目标」决定。
+  //   开了日期详情卡 → 加到那天
+  //   开了任务/项目卡 → 加到那一类（无日期的记今天）
+  //   都没开 → 照常按解析出来的日期落
+  // 输入框在任何时候都显示、都在最上层 —— 它是「当前编辑目标」的输入框。
   const handleParsed = (parsed: ParsedResult) => {
+    // 当前编辑目标决定日期与类型
+    let targetDate = parsed.date;
+    let targetType: ScheduleEvent['type'] = parsed.time ? 'event' : 'task';
+
+    if (statAdding) {
+      // 任务/项目卡里加一条 —— 类型由卡片决定，日期没解析出来就落今天
+      targetType = statKind === 'project' ? 'project' : 'task';
+      if (!targetDate) targetDate = formatLocalDate(new Date());
+      setStatAdding(false);
+    } else if (showDayCard && detailDate) {
+      // 日期详情卡里加一条 —— 强制落到那天
+      targetDate = detailDate;
+    }
+
     const ev: ScheduleEvent = {
       id: newId(),
       title: parsed.title || parsed.raw,
-      date: parsed.date,
+      date: targetDate,
       time: parsed.time,
       endTime: '',
       location: '',
       people: '',
       raw: parsed.raw,
       updatedAt: Date.now(),
-      type: parsed.time ? 'event' : 'task',
+      type: targetType,
       completed: false,
       dateConfirmed: parsed.dateConfirmed,
     };
@@ -610,7 +641,7 @@ export default function Home() {
     if (isOnline && token) {
       enqueueChange({ id: ev.id, op: 'create', payload: toPayload(ev), ts: Date.now() });
     }
-    setDetailDate(parsed.date);
+    setDetailDate(ev.date);
   };
 
   // ==================== 日程操作 ====================
@@ -875,12 +906,24 @@ export default function Home() {
   // 「这一周」里能看到、「今天的安排」却是空的，同一份数据两个说法，
   // 用户会以为记录丢了。现在两处口径一致。
   const dayEvents = (detailDate)
-    ? events.filter(e => e.date === detailDate && e.type !== 'task').sort((a, b) => a.time.localeCompare(b.time))
+    ? events.filter(e => e.date === detailDate && e.type === 'event').sort((a, b) => a.time.localeCompare(b.time))
     : [];
   const dayTasks = (detailDate)
-    ? events.filter(e => e.date === detailDate && e.type === 'task')
+    ? events.filter(e => e.date === detailDate && e.type !== 'event')
         .sort((a, b) => (a.completed ? 1 : 0) - (b.completed ? 1 : 0) || b.updatedAt - a.updatedAt)
     : [];
+
+  // 四宫格清单浮层里要显示哪些记录。
+  // 「日程/任务/项目」数的是本月（跟月历看到的一致）；
+  // 「完成」是过往累计已完成的 —— 所以它可以远大于前三个。
+  const monthPrefix = `${monthAnchor.getFullYear()}-${String(monthAnchor.getMonth() + 1).padStart(2, '0')}-`;
+  const statItems: ScheduleEvent[] = (() => {
+    if (statKind === 'completed') return events.filter(e => e.completed);
+    const inMonth = events.filter(e => e.date.startsWith(monthPrefix));
+    if (statKind === 'event') return inMonth.filter(e => e.type === 'event');
+    if (statKind === 'task') return inMonth.filter(e => e.type === 'task');
+    return inMonth.filter(e => e.type === 'project');
+  })();
 
 
   // ==================== UI ====================
@@ -933,6 +976,23 @@ export default function Home() {
               <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
             </h1>
             <div className="flex items-center gap-1 flex-wrap">
+              {/* 设置 —— 日历订阅/导出/导入/模板/退出都收进这张卡。
+                  顶栏原来挤了 7 个图标，手机上根本认不清哪个是哪个。 */}
+              <button onClick={() => setShowSettings(true)}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="设置" title="设置">
+                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              </button>
+              {/* 反馈 */}
+              <button onClick={() => setShowFeedback(true)}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="反馈" title="反馈建议">
+                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" /></svg>
+              </button>
+              {/* 帮助 = 说明 + 更新讯息 */}
+              <button onClick={() => setShowHelp(true)}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="帮助" title="使用说明">
+                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </button>
+              {/* 同步状态点 —— 激活后是绿的 */}
               <div className="relative group">
                 <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${
                   !isOnline ? 'bg-[#D9D4CF]'
@@ -952,50 +1012,13 @@ export default function Home() {
                   )}
                 </div>
               </div>
+              {/* 刷新 */}
               {isOnline && (
                 <button onClick={() => void syncFromCloud()} disabled={syncState === 'syncing'}
                   className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="同步" title="同步">
                   <RefreshCw className={`w-4 h-4 text-[#5C5C5C] ${syncState === 'syncing' ? 'animate-spin' : ''}`} />
                 </button>
               )}
-              {isOnline ? (
-                <button onClick={handleLogout}
-                  className="w-9 h-9 rounded-lg hover:bg-[#FEE2E2] transition-colors flex items-center justify-center" aria-label="退出" title="退出登录">
-                  <LogOut className="w-4 h-4 text-[#5C5C5C]" />
-                </button>
-              ) : (
-                <button onClick={() => setShowActivate(true)}
-                  className="h-9 px-4 bg-[#1C1C1C] text-white text-sm font-semibold rounded-lg hover:bg-[#333] transition-colors flex items-center gap-1.5" title="激活同步">
-                  <Mail className="w-3.5 h-3.5" /> 激活
-                </button>
-              )}
-              {isOnline && (
-                <button onClick={handleShowCalModal}
-                  className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="日历订阅" title="导出到手机日历">
-                  <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" strokeWidth={2} /><path d="M16 2v4M8 2v4M3 10h18" strokeWidth={2} /></svg>
-                </button>
-              )}
-              <button onClick={() => setShowExportModal(true)}
-                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="导出" title="导出">
-                <Download className="w-4 h-4 text-[#5C5C5C]" />
-              </button>
-              <button onClick={() => { setImportText(''); setImportPreview(null); setShowImportModal(true); }}
-                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="导入" title="导入CSV/Excel">
-                <Upload className="w-4 h-4 text-[#5C5C5C]" />
-              </button>
-              <button onClick={generateCsvTemplate}
-                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="模板下载" title="CSV模板下载">
-                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1" strokeWidth={2}/><path d="M3 5h18M8 5v16M3 10h18" strokeWidth={2}/></svg>
-              </button>
-              {/* v4.0：AI 设置面板已删除 —— 用户不该为系统内部机制操心 */}
-              <button onClick={() => setShowFeedback(true)}
-                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="反馈" title="反馈建议">
-                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" /></svg>
-              </button>
-              <button onClick={() => setShowHelp(true)}
-                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="帮助" title="使用说明">
-                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              </button>
             </div>
           </div>
         </div>
@@ -1280,241 +1303,89 @@ export default function Home() {
         </div>
       )}
 
-      {/* 内容区：日程 + 日历并排 */}
-      <div className="flex-1 flex flex-col md:flex-row gap-3 mx-3 mt-3 overflow-hidden min-h-0">
+      {/* ==================== 三个浮层 ====================
+          点顶栏齿轮 / 点日历某天 / 点四宫格某格 → 弹卡片，下面全模糊。
 
-      {/* Detail Card */}
-      {detailDate && (
-        <div className="md:w-1/4 bg-white rounded-2xl p-4 shadow-sm border border-[#E8E4DF] overflow-y-auto">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="font-semibold text-[#1C1C1C]">{detailDate} 日程</h2>
-            <button onClick={() => setDetailDate(null)}
-              className="w-8 h-8 bg-[#F3F1ED] hover:bg-[#E8E4DF] rounded-lg text-[#A0A0A0] flex items-center justify-center transition-colors" aria-label="关闭">
-              ×
-            </button>
+          模糊遮罩 z-[60]，输入框 z-[100] —— 输入框在遮罩之上，
+          所以浮层打开时它依然清晰可输入（它是「当前编辑目标」的输入框）。 */}
+
+      {showSettings && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-md p-4"
+          onClick={() => setShowSettings(false)}>
+          <div onClick={e => e.stopPropagation()}>
+            <SettingsCard
+              isOnline={isOnline}
+              onActivate={() => setShowActivate(true)}
+              onCalSubscribe={handleShowCalModal}
+              onExport={() => setShowExportModal(true)}
+              onImport={() => { setImportText(''); setImportPreview(null); setShowImportModal(true); }}
+              onTemplate={generateCsvTemplate}
+              onLogout={handleLogout}
+              onClose={() => setShowSettings(false)}
+            />
           </div>
-          {dayEvents.length === 0 && dayTasks.length === 0 ? (
-            <p className="text-[#A0A0A0] text-center py-8 text-sm">
-              {isOnline ? '暂无日程，在下方输入' : '点击右上角激活同步后可查看日程'}
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {/* 定时日程 */}
-              {dayEvents.length > 0 && (
-                <div className="space-y-2">
-                  {dayEvents.map(e => (
-                    <div key={e.id} className="p-3 bg-[#F7F5F2] rounded-xl border border-[#E8E4DF]">
-                      {editingEventId === e.id ? (
-                        <div className="space-y-3">
-                          <div>
-                            <label className="text-xs text-[#A0A0A0] mb-1 block">事项</label>
-                            <input type="text" value={editForm.title} onChange={ev => setEditForm({ ...editForm, title: ev.target.value })}
-                              className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                            {/* 原话：只在编辑时展开，平时不占地方 */}
-                            {events.find(e => e.id === editingEventId)?.raw && (
-                              <p className="text-xs text-[#A0A0A0] mt-1.5 leading-relaxed">
-                                原话：{events.find(e => e.id === editingEventId)?.raw}
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
-                            <input type="date" title="日期" value={editForm.date} onChange={ev => setEditForm({ ...editForm, date: ev.target.value })}
-                              className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                          </div>
-                          <div className="flex gap-3">
-                            <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">开始时间</label>
-                              <input type="time" title="开始时间" value={editForm.time} onChange={ev => setEditForm({ ...editForm, time: ev.target.value })}
-                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                            </div>
-                            <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">结束时间</label>
-                              <input type="time" title="结束时间" value={editForm.endTime} onChange={ev => setEditForm({ ...editForm, endTime: ev.target.value })}
-                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                            </div>
-                          </div>
-                          <div className="flex gap-3">
-                            <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">地点</label>
-                              <input type="text" value={editForm.location} onChange={ev => setEditForm({ ...editForm, location: ev.target.value })}
-                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="教室/会议室" />
-                            </div>
-                            <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">人员</label>
-                              <input type="text" value={editForm.people} onChange={ev => setEditForm({ ...editForm, people: ev.target.value })}
-                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="老师/同学" />
-                            </div>
-                          </div>
-                          <div className="flex gap-2 justify-end">
-                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', location: '', people: '' }); }}
-                              className="px-4 py-1.5 text-sm text-[#5C5C5C] bg-[#E8E4DF] rounded-lg hover:bg-[#D9D4CF] transition-colors">取消</button>
-                            <button onClick={saveEdit} className="px-4 py-1.5 text-sm text-white bg-[#ED6A3B] rounded-lg hover:bg-[#D45D2E] transition-colors">保存</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-3">
-                          <span className="bg-[#ED6A3B] text-white text-sm px-3 py-1.5 rounded-lg font-mono font-semibold min-w-[60px] text-center">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <div className="font-medium text-[#1C1C1C] truncate">{e.title}</div>
-                              {e.dateConfirmed === 0 && (
-                                <button onClick={() => startEdit(e)}
-                                  className="shrink-0 text-[10px] text-[#ED6A3B] bg-[#FFF5F0] hover:bg-[#FFE8DC] rounded px-1.5 py-0.5 transition-colors"
-                                  title="日期没认出来，改一下">
-                                  待确认
-                                </button>
-                              )}
-                            </div>
-                            {(e.location || e.people) && <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">{e.location}{e.location && e.people ? ' · ' : ''}{e.people}</div>}
-                          </div>
-                          <div className="flex gap-1">
-                            <button onClick={() => startEdit(e)} className="p-2 text-[#A0A0A0] hover:text-[#ED6A3B] hover:bg-[#FFF5F0] rounded-lg transition-colors" aria-label="编辑">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                            </button>
-                            <button onClick={() => deleteEvent(e.id)} className="p-2 text-[#A0A0A0] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" aria-label="删除">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* 分隔线 */}
-              {dayEvents.length > 0 && dayTasks.length > 0 && (
-                <div className="border-t border-[#E8E4DF]" />
-              )}
-
-              {/* 当日任务 */}
-              {dayTasks.length > 0 && (
-                <div className="space-y-1.5">
-                  {dayTasks.map(e => (
-                    <div key={e.id} className={`p-3 rounded-xl border border-[#E8E4DF] transition-colors ${e.completed ? 'bg-[#F7F5F2]/50' : 'bg-[#F7F5F2]'}`}>
-                      {editingEventId === e.id ? (
-                        <div className="space-y-3">
-                          <div>
-                            <label className="text-xs text-[#A0A0A0] mb-1 block">任务名称</label>
-                            <input type="text" value={editForm.title} onChange={ev => setEditForm({ ...editForm, title: ev.target.value })}
-                              className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                          </div>
-                          <div className="flex gap-3">
-                            <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
-                              <input type="date" title="日期" value={editForm.date} onChange={ev => setEditForm({ ...editForm, date: ev.target.value })}
-                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" />
-                            </div>
-                          </div>
-                          <div className="flex gap-3">
-                            <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">地点</label>
-                              <input type="text" value={editForm.location} onChange={ev => setEditForm({ ...editForm, location: ev.target.value })}
-                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="教室/会议室" />
-                            </div>
-                            <div className="flex-1">
-                              <label className="text-xs text-[#A0A0A0] mb-1 block">人员</label>
-                              <input type="text" value={editForm.people} onChange={ev => setEditForm({ ...editForm, people: ev.target.value })}
-                                className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]" placeholder="老师/同学" />
-                            </div>
-                          </div>
-                          <div className="flex gap-2 justify-end">
-                            <button onClick={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', location: '', people: '' }); }}
-                              className="px-4 py-1.5 text-sm text-[#5C5C5C] bg-[#E8E4DF] rounded-lg hover:bg-[#D9D4CF] transition-colors">取消</button>
-                            <button onClick={saveEdit} className="px-4 py-1.5 text-sm text-white bg-[#ED6A3B] rounded-lg hover:bg-[#D45D2E] transition-colors">保存</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-3">
-                          <button onClick={() => toggleTaskCompleted(e.id)}
-                            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
-                              e.completed
-                                ? 'bg-[#ED6A3B] border-[#ED6A3B]'
-                                : 'border-[#D9D4CF] hover:border-[#ED6A3B]'
-                            }`}>
-                            {e.completed && (
-                              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                              </svg>
-                            )}
-                          </button>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <div className={`font-medium truncate ${e.completed ? 'line-through text-[#A0A0A0]' : 'text-[#1C1C1C]'}`}>{e.title}</div>
-                              {e.dateConfirmed === 0 && (
-                                <button onClick={() => startEdit(e)}
-                                  className="shrink-0 text-[10px] text-[#ED6A3B] bg-[#FFF5F0] hover:bg-[#FFE8DC] rounded px-1.5 py-0.5 transition-colors"
-                                  title="日期没认出来，改一下">
-                                  待确认
-                                </button>
-                              )}
-                            </div>
-                            {(e.location || e.people) && <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>{e.location}{e.location && e.people ? ' · ' : ''}{e.people}</div>}
-                          </div>
-                          <div className="flex gap-1">
-                            <button onClick={() => startEdit(e)} className="p-2 text-[#A0A0A0] hover:text-[#ED6A3B] hover:bg-[#FFF5F0] rounded-lg transition-colors" aria-label="编辑">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                            </button>
-                            <button onClick={() => deleteEvent(e.id)} className="p-2 text-[#A0A0A0] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" aria-label="删除">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 
-      {/* 周视图 —— 一屏两区：上面七天时间轴，下面本周流水 */}
-      <div className="flex-1 flex flex-col min-h-0">
-        {/* 周切换 */}
-        <div className="flex justify-between items-center mb-3 px-1">
-          <button onClick={() => setWeekAnchor(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() - 7))}
-            className="w-9 h-9 bg-white/70 hover:bg-white rounded-full text-[#5C5C5C] flex items-center justify-center transition-colors" aria-label="上一周">
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <div className="text-center">
-            <h2 className="text-sm font-semibold text-[#1C1C1C]">
-              {weekDates(weekAnchor)[0]} ~ {weekDates(weekAnchor)[6]}
-            </h2>
-            <button onClick={() => setWeekAnchor(new Date())}
-              className="text-xs text-[#ED6A3B] hover:underline">
-              回到本周
-            </button>
+      {showDayCard && detailDate && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-md p-4"
+          onClick={() => { setShowDayCard(false); setEditingEventId(null); }}>
+          <div onClick={e => e.stopPropagation()}>
+            <DayCard
+              date={detailDate}
+              dayEvents={dayEvents}
+              dayTasks={dayTasks}
+              editingEventId={editingEventId}
+              editForm={editForm}
+              onEditFormChange={setEditForm}
+              onStartEdit={startEdit}
+              onCancelEdit={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', location: '', people: '' }); }}
+              onSaveEdit={saveEdit}
+              onToggleCompleted={toggleTaskCompleted}
+              onDelete={deleteEvent}
+              onClose={() => { setShowDayCard(false); setEditingEventId(null); }}
+            />
           </div>
-          <button onClick={() => setWeekAnchor(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7))}
-            className="w-9 h-9 bg-white/70 hover:bg-white rounded-full text-[#5C5C5C] flex items-center justify-center transition-colors" aria-label="下一周">
-            <ChevronRight className="w-5 h-5" />
-          </button>
         </div>
+      )}
 
-        <div className="flex-1 overflow-y-auto min-h-0">
-          <WeekView
-            anchor={weekAnchor}
-            events={events.map(e => ({
-              id: e.id, title: e.title, date: e.date, time: e.time,
-              endTime: e.endTime, location: e.location, people: e.people,
-            }))}
-            today={new Date()}
-            narrowDate={detailDate || weekToDateString(new Date())}
-            isNarrow={isNarrow}
-            onEventClick={(e) => {
-              const full = events.find(x => x.id === e.id);
-              // 必须用 startEdit —— 它会同时填好 editForm。
-              // 以前这里只设了 editingEventId，左边弹出来的编辑表单全是空的：
-              // 框架渲染了，但里面没有这条记录的任何内容。
-              if (full) { setDetailDate(full.date); startEdit(full); }
-            }}
-          />
+      {showStatCard && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-md p-4"
+          onClick={() => setShowStatCard(false)}>
+          <div onClick={e => e.stopPropagation()}>
+            <StatCard
+              kind={statKind}
+              title={{ event: '日程', task: '任务', project: '项目', completed: '已完成' }[statKind]}
+              items={statItems}
+              canAdd={statKind === 'task' || statKind === 'project'}
+              onAdd={() => setStatAdding(true)}
+              onToggleCompleted={toggleTaskCompleted}
+              onDelete={deleteEvent}
+              onClose={() => setShowStatCard(false)}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
+      {/* 内容区：月历卡片 + 四宫格。
+          桌面端跟移动端一样 —— 不再「左周视图 + 右明细卡」并排。
+          月历在宽屏上格子更大，看得更清楚；明细改成点日期后弹浮层。 */}
+      <div className="flex-1 flex flex-col gap-2.5 mx-3 mt-3 pb-2 min-h-0">
+
+        <MonthView
+          year={monthAnchor.getFullYear()}
+          month={monthAnchor.getMonth() + 1}
+          events={events.map(e => ({
+            id: e.id, title: e.title, date: e.date, time: e.time,
+            endTime: e.endTime, location: e.location, people: e.people,
+            type: e.type, completed: e.completed,
+          }))}
+          today={new Date()}
+          onPrevMonth={() => setMonthAnchor(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
+          onNextMonth={() => setMonthAnchor(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
+          onDateClick={(d) => { setDetailDate(d); setShowDayCard(true); }}
+          onStatClick={(k) => { setStatKind(k); setShowStatCard(true); }}
+        />
       </div>
 
       {/* 输入区 —— 唯一输入入口：麦克风 + 文本框 + 同步状态 */}

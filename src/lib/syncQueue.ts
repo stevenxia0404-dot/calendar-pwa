@@ -26,7 +26,8 @@ export interface SyncPayload {
   location: string;
   people: string;
   raw: string;
-  type: 'event' | 'task';
+  /** 'event' 有时间 · 'task' 没时间 · 'project' 项目 */
+  type: 'event' | 'task' | 'project';
   completed: boolean;
   dateConfirmed: 0 | 1;
 }

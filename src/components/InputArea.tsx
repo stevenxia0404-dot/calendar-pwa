@@ -24,7 +24,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { Mic, Send } from 'lucide-react';
 import { parseText, ParsedResult } from '@/lib/dateParser';
 import {
   detectCapability,
@@ -34,6 +33,31 @@ import {
 } from '@/lib/voice';
 import { useVoiceRecorder } from '@/lib/useVoiceRecorder';
 import VoiceCapsule from '@/components/VoiceCapsule';
+
+/* ==================== 图标 ==================== */
+
+/** 声波图标 —— 语音输入的入口。
+    画成三条递增的波，比麦克风更像「正在听」，也更像参考图里那种样式。 */
+function AudioWaveIcon() {
+  return (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" viewBox="0 0 24 24">
+      <path d="M7 10v4" />
+      <path d="M12 6v12" />
+      <path d="M17 9v6" />
+    </svg>
+  );
+}
+
+/** 纸飞机 —— 发送。
+    不用 lucide 的 Send（那个是直箭头），纸飞机更符合「发消息」的直觉。 */
+function SendPlaneIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <path d="M21.5 2.5L11 13" />
+      <path d="M21.5 2.5l-6.7 19-3.8-8.5-8.5-3.8 19-6.7z" />
+    </svg>
+  );
+}
 
 export interface InputAreaProps {
   /** API 基址 */
@@ -268,20 +292,26 @@ export default function InputArea({
 
       <div
         ref={wrapRef}
-        className="fixed bottom-0 left-0 right-0 z-40 shrink-0 border-t border-[#E8E4DF] bg-white/90 backdrop-blur-md pb-[var(--sab)]"
+        // z-[100]：必须高于所有浮层（z-[60]）。
+        // 浮层打开时下面的内容全模糊，但输入框永远在最上层、永远清晰可输入 ——
+        // 它是「当前编辑目标」的输入框，浮层打开时依然能用。
+        className="fixed bottom-0 left-0 right-0 z-[100] shrink-0 pb-[var(--sab)]"
       >
         {/* 未激活提示 —— 这是最容易被忽略、后果最重的一种状态：
             没激活时记下的事只在这台设备上，换台设备看不见。
             顶栏那个小圆点太不起眼，用户会以为一切正常，
-            直到发现「手机上看不到」才发现问题。这里给一句明话。 */}
+            直到发现「手机上看不到」才发现问题。这里给一句明话。
+
+            做成一行小字而不是一块横幅：横幅太占地方，
+            而输入区是 fixed 钉在底部的，一块横幅就把壁纸挡掉一大片。 */}
         {!token && (
           <div className="px-4 pt-2">
             <button
               onClick={onActivate}
-              className="w-full flex items-center justify-between gap-3 text-left text-[11px] text-[#8A6D3B] bg-[#FFF9EC] border border-[#F0E2C0] rounded-lg px-3 py-2 hover:bg-[#FFF4DC] transition-colors"
+              className="w-full flex items-center justify-between gap-3 text-left text-[11px] text-[#8A6D3B] hover:text-[#B8860B] transition-colors"
             >
-              <span className="min-w-0">未激活 · 记下的事只存在这台设备上，手机电脑看不到</span>
-              <span className="shrink-0 font-medium text-[#B8860B]">去激活 →</span>
+              <span className="min-w-0 truncate">未激活 · 只在这台设备</span>
+              <span className="shrink-0 font-medium">去激活 →</span>
             </button>
           </div>
         )}
@@ -306,7 +336,7 @@ export default function InputArea({
           </div>
         )}
 
-        <div className="px-4 py-3">
+        <div className="px-3 py-2.5 sm:px-4">
           {voiceMode ? (
             <VoiceCapsule
               phase={voice.phase}
@@ -326,9 +356,21 @@ export default function InputArea({
               onExit={exitVoiceMode}
             />
           ) : (
-            <div className="rounded-2xl bg-[#F3F1ED] p-1.5">
-              {/* 文字区 —— 上面一层。文字多了整颗胶囊向上长高，
-                  底边（控件行）钉在屏幕底部不动。 */}
+            /* 横排一行：声波图标 · 文字 · 纸飞机。
+               文字多了整颗胶囊向上长高（底边钉在屏幕底部不动）。 */
+            <div className="rounded-2xl bg-white/72 backdrop-blur-md border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] flex items-end gap-2 px-2 py-2">
+              {/* 左：语音图标。点它切到语音态，图标会变成键盘。 */}
+              <button
+                ref={micBtnRef}
+                onClick={enterVoiceMode}
+                title="语音记录"
+                aria-label="语音记录"
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all hover:bg-white/70 text-[#5C5C5C]"
+              >
+                <AudioWaveIcon />
+              </button>
+
+              {/* 中：文字区 */}
               <textarea
                 ref={textareaRef}
                 value={text}
@@ -342,39 +384,29 @@ export default function InputArea({
                   }
                 }}
                 rows={1}
-                placeholder={isNarrow ? '说一句…' : '说一句就记下来…'}
-                className="w-full bg-transparent px-2 py-2 text-[#1C1C1C] outline-none text-sm placeholder:text-[#A0A0A0] resize-none max-h-24 overflow-y-auto block"
+                placeholder="发信息或按住说话"
+                className="flex-1 min-w-0 bg-transparent px-1 py-1.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#B4B2A9] resize-none max-h-24 overflow-y-auto block"
               />
 
-              {/* 控件行 —— 下面一层：左语音，右发送。 */}
-              <div className="flex items-center justify-between px-0.5 pt-0.5">
-                <button
-                  ref={micBtnRef}
-                  onClick={enterVoiceMode}
-                  title="语音记录"
-                  aria-label="语音记录"
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all hover:bg-[#E8E4DF] text-[#5C5C5C]"
-                >
-                  <Mic className="w-5 h-5" />
-                </button>
-
-                <button
-                  onClick={handleSubmit}
-                  disabled={!text.trim()}
-                  aria-label="记下来"
-                  className="w-10 h-10 bg-[#ED6A3B] hover:bg-[#D45D2E] disabled:opacity-40 rounded-xl text-white flex items-center justify-center shrink-0 transition-all"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
+              {/* 右：纸飞机 = 发送 */}
+              <button
+                onClick={handleSubmit}
+                disabled={!text.trim()}
+                aria-label="记下来"
+                className="w-9 h-9 rounded-full bg-[#ED6A3B] hover:bg-[#D45D2E] disabled:opacity-35 text-white flex items-center justify-center shrink-0 transition-all"
+              >
+                <SendPlaneIcon />
+              </button>
             </div>
           )}
 
-          {/* 同步状态 —— 常驻，不需要点进去看。语音态时收起（胶囊里空间紧张）。 */}
+          {/* 同步状态 —— 常驻，不需要点进去看。语音态时收起（胶囊里空间紧张）。
+              颜色要够深：半透明卡片 + 浅色壁纸的背景下，
+              #A0A0A0 的浅灰几乎看不见。 */}
           {!voiceMode && (
-            <div className="flex items-center gap-1.5 mt-2 px-1">
+            <div className="flex items-center gap-1.5 mt-1.5 px-2">
               <span className={`w-1.5 h-1.5 rounded-full ${syncColor} ${syncState === 'syncing' ? 'animate-pulse' : ''}`} />
-              <span className="text-[10px] text-[#A0A0A0]">{syncLabel}</span>
+              <span className="text-[10px] text-[#6B6B6B]">{syncLabel}</span>
             </div>
           )}
         </div>
