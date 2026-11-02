@@ -18,6 +18,7 @@ import { newId } from '@/lib/id';
 
 import WeekView from '@/components/WeekView';
 import InputArea from '@/components/InputArea';
+import Inspector from '@/components/Inspector';
 import { ParsedResult } from '@/lib/dateParser';
 import { toDateString as weekToDateString, weekDates } from '@/lib/weekLogic';
 
@@ -1596,6 +1597,10 @@ export default function Home() {
         isNarrow={isNarrow}
         onActivate={() => setShowActivate(true)}
       />
+
+      {/* 开发期标注器 —— 只在 next dev 出现，生产构建整块不渲染。
+          改 UI 时不用靠文字描述「指哪」，点一下元素就有精确信息。 */}
+      {process.env.NODE_ENV === 'development' && <Inspector />}
     </main>
   );
 }
