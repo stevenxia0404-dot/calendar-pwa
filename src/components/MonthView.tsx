@@ -74,13 +74,13 @@ export default function MonthView({
               <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
             </button>
           </div>
-          <span className="text-xs text-[#A0A0A0] tabular-nums">{year}</span>
+          <span className="text-sm font-medium text-[#5C5C5C] tabular-nums">{year}</span>
         </div>
 
-        {/* 星期表头 */}
-        <div className="grid grid-cols-7 gap-1 mb-0.5">
+        {/* 星期表头 —— 加大加粗加深：手机上 10px + #A0A0A0 太淡认不出来 */}
+        <div className="grid grid-cols-7 gap-1 mb-1">
           {WEEK_HEAD.map(w => (
-            <div key={w} className="text-center text-[10px] text-[#A0A0A0] font-medium py-0.5">{w}</div>
+            <div key={w} className="text-center text-[12px] font-semibold text-[#3A3A3A] py-0.5">{w}</div>
           ))}
         </div>
 
@@ -104,10 +104,14 @@ export default function MonthView({
           <button
             key={s.kind}
             onClick={() => onStatClick?.(s.kind)}
-            className="card-glass aspect-[3/2] rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-3.5 py-3 flex flex-col justify-between text-left transition-all hover:bg-white/75 active:scale-[0.98]"
+            className="card-glass aspect-[3/2] rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-4 py-3.5 flex flex-col justify-end transition-all hover:bg-white/80 active:scale-[0.98]"
           >
-            <span className="text-xs text-[#A0A0A0]">{s.label}</span>
-            <span className="text-3xl font-medium tabular-nums self-end leading-none" style={{ color: s.color }}>{s.n}</span>
+            {/* 文字在左下角、数字在右下角 —— 同一行两端对齐。
+                标签颜色 #4A4A4A：原来 #A0A0A0 在半透明卡片上太淡看不清。 */}
+            <div className="flex items-end justify-between gap-2 w-full">
+              <span className="text-[15px] font-medium text-[#4A4A4A] leading-none">{s.label}</span>
+              <span className="text-4xl font-medium tabular-nums leading-none" style={{ color: s.color }}>{s.n}</span>
+            </div>
           </button>
         ))}
       </div>
@@ -126,44 +130,46 @@ function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: st
     <button
       onClick={() => cell.date && onClick?.(cell.date)}
       disabled={!cell.date}
-      className={`relative flex flex-col items-center justify-start rounded-lg py-1 h-full transition-colors ${
+      className={`relative flex flex-col items-center rounded-lg py-1 h-full transition-colors ${
         cell.inMonth ? 'hover:bg-white/60' : ''
       }`}
       aria-label={cell.date ? `${cell.date}` : undefined}
     >
-      {/* 今天的圆圈 —— 必须画在数字**底下**。
-          顺序很关键：圆圈先画（无 z-index），数字后画（z-10），
-          这样数字压在圆上，白字看得清。 */}
-      {isToday && (
+      {/* 今天的圆圈 —— 与数字**同心**。
+          做法：圆圈和数字都放在一个 26×26 的方框里，
+          圆圈 absolute 居中于它、数字 normal 居中于它。
+          之前圆圈用 top-1、字用 leading-6，两套基准 → 看着是斜的。 */}
+      <span className="relative w-[26px] h-[26px] flex items-center justify-center shrink-0">
+        {isToday && (
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 rounded-full bg-[#ED6A3B] shadow-[0_1px_4px_rgba(237,106,59,0.35)]"
+          />
+        )}
         <span
-          aria-hidden="true"
-          className="absolute left-1/2 -translate-x-1/2 top-1 w-[21px] h-[21px] rounded-full bg-[#ED6A3B] shadow-[0_1px_4px_rgba(237,106,59,0.35)]"
-        />
-      )}
-
-      {/* 日期数字 */}
-      <span
-        className={`relative z-10 text-[12px] leading-6 tabular-nums ${
-          !cell.inMonth ? 'text-[#C0BDB8]' : isToday ? 'text-white font-medium' : 'text-[#1C1C1C]'
-        }`}
-      >
-        {cell.day}
+          className={`relative z-10 text-[13px] leading-none tabular-nums ${
+            !cell.inMonth ? 'text-[#C0BDB8]' : isToday ? 'text-white font-medium' : 'text-[#1C1C1C]'
+          }`}
+        >
+          {cell.day}
+        </span>
       </span>
 
       {/* 事件横线 —— 一件事一条，按类型分颜色。
           最多画 4 条：格子高度有限，再多就挤到下一行去了。
-          超过 4 条显示 +N。 */}
-      <span className="flex flex-col items-center gap-[2px] mt-[2px] w-full px-[3px]">
+          超过 4 条显示 +N。
+          线条加粗一倍（2.5px → 5px）：太细在手机上几乎看不见。 */}
+      <span className="flex flex-col items-center gap-[3px] mt-[3px] w-full px-[3px]">
         {cell.lines.slice(0, 4).map(l => (
           <span
             key={l.id}
-            className="block w-full max-w-[26px] h-[2.5px] rounded-full"
+            className="block w-full max-w-[28px] h-[5px] rounded-full"
             style={{ background: lineColor(l.type, l.completed) }}
             title={l.title}
           />
         ))}
         {cell.lines.length > 4 && (
-          <span className="text-[9px] text-[#A0A0A0] leading-none">+{cell.lines.length - 4}</span>
+          <span className="text-[10px] text-[#A0A0A0] leading-none">+{cell.lines.length - 4}</span>
         )}
       </span>
     </button>
