@@ -888,9 +888,8 @@ export default function Home() {
   return (
     // 底部不留 pb：输入区是 fixed 钉在屏幕底部的，
     // 文档流里由 InputArea 自己的占位块让出等高空间。
-    <main className="min-h-screen flex flex-col bg-[#F7F5F2]/90">
-      {/* 内容区实底：背景图只在最外圈露出，内容区不透明 ——
-          隐私视觉要的是「隔着一层看不清楚」，不是「看得出背后有张图」 */}
+    // 内容区不再实底 —— 壁纸要透出来，栏目浮在它上面。
+    <main className="min-h-screen flex flex-col">
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>
@@ -922,76 +921,82 @@ export default function Home() {
 
       {/* Header —— pt 要加上顶部安全区：
           加到桌面（standalone）打开时，iPhone 的状态栏是盖在内容上的，
-          不留这一块，顶栏的标题和按钮会被状态栏压住。 */}
-      <header className="bg-white px-5 pt-[calc(var(--sat)+1rem)] pb-4 sm:pt-[calc(var(--sat)+1.25rem)] sm:pb-5 sticky top-0 z-50 border-b border-[#E8E4DF]">
-        <div className="flex flex-wrap justify-between items-center gap-y-2 max-w-full mx-auto">
-          <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight shrink-0">
-            <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
-          </h1>
-          <div className="flex items-center gap-1 flex-wrap">
-            <div className="relative group">
-              <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${
-                !isOnline ? 'bg-[#D9D4CF]'
-                  : syncState === 'syncing' ? 'bg-[#ED6A3B] animate-pulse'
-                  : syncState === 'offline' ? 'bg-[#D9D4CF]'
-                  : 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]'
-              }`} />
-              <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-[60] shadow-lg">
-                {isOnline ? (
-                  <><span className="text-[#34d399]">●</span> {user?.email}<br /><span className="text-[#A0A0A0]">
-                    {syncState === 'syncing' ? '正在同步…'
-                      : syncState === 'offline' ? `离线待同步${pendingCount ? ` · ${pendingCount} 条待传` : ''}`
-                      : '已同步 · 多设备自动同步'}
-                  </span></>
-                ) : (
-                  '未激活 · 记下的事只在这台设备上'
-                )}
+          不留这一块，顶栏的标题和按钮会被状态栏压住。
+
+          形态：以前是全宽白条（bg-white + 底边框），
+          现在改成悬浮的圆角卡片 —— 壁纸能透过四周的缝看见，
+          顶栏本身半透明 + 毛玻璃。 */}
+      <header className="sticky top-0 z-50 px-3 pt-[calc(var(--sat)+0.75rem)] pb-1 sm:px-4">
+        <div className="card-glass max-w-full mx-auto rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-4 py-3 sm:px-5 sm:py-3.5">
+          <div className="flex flex-wrap justify-between items-center gap-y-2 max-w-full">
+            <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight shrink-0">
+              <img src="/icon-192x192.png" alt="" className="w-7 h-7 rounded" /> 菠萝日程
+            </h1>
+            <div className="flex items-center gap-1 flex-wrap">
+              <div className="relative group">
+                <span className={`w-2.5 h-2.5 rounded-full block cursor-default ${
+                  !isOnline ? 'bg-[#D9D4CF]'
+                    : syncState === 'syncing' ? 'bg-[#ED6A3B] animate-pulse'
+                    : syncState === 'offline' ? 'bg-[#D9D4CF]'
+                    : 'bg-[#059669] shadow-[0_0_6px_rgba(5,150,105,0.4)]'
+                }`} />
+                <div className="absolute right-0 top-6 hidden group-hover:block bg-[#1C1C1C] text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-[60] shadow-lg">
+                  {isOnline ? (
+                    <><span className="text-[#34d399]">●</span> {user?.email}<br /><span className="text-[#A0A0A0]">
+                      {syncState === 'syncing' ? '正在同步…'
+                        : syncState === 'offline' ? `离线待同步${pendingCount ? ` · ${pendingCount} 条待传` : ''}`
+                        : '已同步 · 多设备自动同步'}
+                    </span></>
+                  ) : (
+                    '未激活 · 记下的事只在这台设备上'
+                  )}
+                </div>
               </div>
+              {isOnline && (
+                <button onClick={() => void syncFromCloud()} disabled={syncState === 'syncing'}
+                  className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="同步" title="同步">
+                  <RefreshCw className={`w-4 h-4 text-[#5C5C5C] ${syncState === 'syncing' ? 'animate-spin' : ''}`} />
+                </button>
+              )}
+              {isOnline ? (
+                <button onClick={handleLogout}
+                  className="w-9 h-9 rounded-lg hover:bg-[#FEE2E2] transition-colors flex items-center justify-center" aria-label="退出" title="退出登录">
+                  <LogOut className="w-4 h-4 text-[#5C5C5C]" />
+                </button>
+              ) : (
+                <button onClick={() => setShowActivate(true)}
+                  className="h-9 px-4 bg-[#1C1C1C] text-white text-sm font-semibold rounded-lg hover:bg-[#333] transition-colors flex items-center gap-1.5" title="激活同步">
+                  <Mail className="w-3.5 h-3.5" /> 激活
+                </button>
+              )}
+              {isOnline && (
+                <button onClick={handleShowCalModal}
+                  className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="日历订阅" title="导出到手机日历">
+                  <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" strokeWidth={2} /><path d="M16 2v4M8 2v4M3 10h18" strokeWidth={2} /></svg>
+                </button>
+              )}
+              <button onClick={() => setShowExportModal(true)}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="导出" title="导出">
+                <Download className="w-4 h-4 text-[#5C5C5C]" />
+              </button>
+              <button onClick={() => { setImportText(''); setImportPreview(null); setShowImportModal(true); }}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="导入" title="导入CSV/Excel">
+                <Upload className="w-4 h-4 text-[#5C5C5C]" />
+              </button>
+              <button onClick={generateCsvTemplate}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="模板下载" title="CSV模板下载">
+                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1" strokeWidth={2}/><path d="M3 5h18M8 5v16M3 10h18" strokeWidth={2}/></svg>
+              </button>
+              {/* v4.0：AI 设置面板已删除 —— 用户不该为系统内部机制操心 */}
+              <button onClick={() => setShowFeedback(true)}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="反馈" title="反馈建议">
+                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" /></svg>
+              </button>
+              <button onClick={() => setShowHelp(true)}
+                className="w-9 h-9 rounded-lg hover:bg-white/70 transition-colors flex items-center justify-center" aria-label="帮助" title="使用说明">
+                <svg className="w-4 h-4 text-[#5C5C5C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </button>
             </div>
-            {isOnline && (
-              <button onClick={() => void syncFromCloud()} disabled={syncState === 'syncing'}
-                className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="同步" title="同步">
-                <RefreshCw className={`w-4 h-4 text-[#A0A0A0] ${syncState === 'syncing' ? 'animate-spin' : ''}`} />
-              </button>
-            )}
-            {isOnline ? (
-              <button onClick={handleLogout}
-                className="w-9 h-9 rounded-lg hover:bg-[#FEE2E2] transition-colors flex items-center justify-center" aria-label="退出" title="退出登录">
-                <LogOut className="w-4 h-4 text-[#A0A0A0]" />
-              </button>
-            ) : (
-              <button onClick={() => setShowActivate(true)}
-                className="h-9 px-4 bg-[#1C1C1C] text-white text-sm font-semibold rounded-lg hover:bg-[#333] transition-colors flex items-center gap-1.5" title="激活同步">
-                <Mail className="w-3.5 h-3.5" /> 激活
-              </button>
-            )}
-            {isOnline && (
-              <button onClick={handleShowCalModal}
-                className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="日历订阅" title="导出到手机日历">
-                <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" strokeWidth={2} /><path d="M16 2v4M8 2v4M3 10h18" strokeWidth={2} /></svg>
-              </button>
-            )}
-            <button onClick={() => setShowExportModal(true)}
-              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导出" title="导出">
-              <Download className="w-4 h-4 text-[#A0A0A0]" />
-            </button>
-            <button onClick={() => { setImportText(''); setImportPreview(null); setShowImportModal(true); }}
-              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="导入" title="导入CSV/Excel">
-              <Upload className="w-4 h-4 text-[#A0A0A0]" />
-            </button>
-            <button onClick={generateCsvTemplate}
-              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="模板下载" title="CSV模板下载">
-              <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1" strokeWidth={2}/><path d="M3 5h18M8 5v16M3 10h18" strokeWidth={2}/></svg>
-            </button>
-            {/* v4.0：AI 设置面板已删除 —— 用户不该为系统内部机制操心 */}
-            <button onClick={() => setShowFeedback(true)}
-              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="反馈" title="反馈建议">
-              <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" /></svg>
-            </button>
-            <button onClick={() => setShowHelp(true)}
-              className="w-9 h-9 rounded-lg hover:bg-[#F3F1ED] transition-colors flex items-center justify-center" aria-label="帮助" title="使用说明">
-              <svg className="w-4 h-4 text-[#A0A0A0]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            </button>
           </div>
         </div>
       </header>

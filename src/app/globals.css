@@ -30,12 +30,77 @@
 body {
   color: var(--foreground);
   background-color: #F7F5F2;
-  background-image: linear-gradient(rgba(247, 245, 242, 0.82), rgba(247, 245, 242, 0.82)), url('/background.webp');
+  /* 壁纸移到了 body::before（见下）。
+     body 本身只留底色 —— 遮罩和模糊都在背景层里做。 */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* ==================== 壁纸层 ====================
+   壁纸铺满整屏，在所有内容之后。
+
+   为什么要模糊：
+   壁纸是一张很鲜艳的花卉图（红花绿叶），直接铺出来会跟卡片上的
+   文字、图标抢注意力 —— 顶栏的灰色图标直接消失在花里。
+   模糊之后它变成一片柔和的底色，图案还在（看得出是那张图），
+   但不再跟内容抢。这正是 iOS/macOS「壁纸 + 磨砂卡片」的标准做法。
+
+   inset 负值：模糊会在边缘渗出透明，露出底色。
+   向外撑 60px 再模糊，正好把边缘填满。
+
+   isolation: isolate —— 让 body 成为 stacking context，
+   这样 ::before 的 z-index:-1 落在 body 背景之上、内容之下，
+   不会跑到 html 背景后面被吃掉。 */
+html, body {
+  min-height: 100%;
+}
+
+body {
+  isolation: isolate;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: -60px;
+  z-index: -1;
+  background-image: linear-gradient(rgba(247, 245, 242, 0.55), rgba(247, 245, 242, 0.55)), url('/background.webp');
   background-size: cover;
   background-position: center;
-  background-attachment: fixed;
   background-repeat: no-repeat;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  filter: blur(28px) saturate(1.15);
+  pointer-events: none;
+}
+
+/* ==================== 悬浮卡片 ====================
+   整个界面改成「壁纸 + 一堆悬浮圆角卡片」的结构。
+   这些 class 抽出来，是为了让顶栏、月历、四宫格、输入框、弹层
+   用同一套视觉语言 —— 透明度、毛玻璃、圆角、边框全一致，
+   不会一个一个地各写一遍然后慢慢走样。 */
+@layer components {
+  /* 半透明 + 毛玻璃的卡片底。
+     backdrop-blur 让壁纸在卡片后面糊开，卡片本身能透出一点壁纸的色调。 */
+  .card-glass {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  }
+
+  /* 输入框那一层要更实一点 —— 里面是文字，
+     太透会看不清用户自己输入的内容。 */
+  .card-glass-strong {
+    background: rgba(255, 255, 255, 0.86);
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  }
+
+  /* 弹出来的卡片（设置、日期详情、类别清单）——
+     它们浮在最上层且下面全模糊，所以底色要更接近实心，
+     否则叠在模糊层上会显脏。 */
+  .card-float {
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(32px) saturate(1.6);
+    -webkit-backdrop-filter: blur(32px) saturate(1.6);
+  }
 }
 
 @layer utilities {
