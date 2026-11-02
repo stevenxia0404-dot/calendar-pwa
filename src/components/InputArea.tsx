@@ -268,7 +268,7 @@ export default function InputArea({
 
       <div
         ref={wrapRef}
-        className="fixed bottom-0 left-0 right-0 z-40 shrink-0 border-t border-[#E8E4DF] bg-white/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)]"
+        className="fixed bottom-0 left-0 right-0 z-40 shrink-0 border-t border-[#E8E4DF] bg-white/90 backdrop-blur-md pb-[var(--sab)]"
       >
         {/* 未激活提示 —— 这是最容易被忽略、后果最重的一种状态：
             没激活时记下的事只在这台设备上，换台设备看不见。

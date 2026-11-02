@@ -147,7 +147,9 @@ export default function Inspector() {
   const [on, setOn] = useState(false);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [hover, setHover] = useState<{ x: number; y: number; w: number; h: number; label: string } | null>(null);
-  const [panelOpen, setPanelOpen] = useState(true);
+  // 面板默认收起 —— 它挺占地方的，在设备画布里会把整个屏幕盖住。
+  // 需要时点右下角的「标注」按钮或按 Alt+I。
+  const [panelOpen, setPanelOpen] = useState(false);
   /** 刚自动复制了几条 —— 面板上给个「已复制」反馈 */
   const [copied, setCopied] = useState(0);
 
@@ -302,15 +304,17 @@ export default function Inspector() {
         ))}
       </div>
 
-      {/* 开关按钮 —— 位置固定，不随面板开合跳动 */}
+      {/* 开关按钮 —— 关着时显示「标注」两字，让人知道这能点 */}
       <button
         onClick={toggle}
         title="标注模式（Alt+I）—— 开启后点页面上的元素，我就能拿到它的精确信息"
-        className={`fixed z-[99999] w-8 h-8 rounded-full text-xs font-bold shadow-lg transition-all
-          ${on ? 'bg-[#ED6A3B] text-white scale-110' : 'bg-[#1C1C1C]/70 text-white hover:bg-[#1C1C1C]'}`}
-        style={{ right: 12, bottom: 'calc(env(safe-area-inset-bottom) + 12px)' }}
+        className={`fixed z-[99999] rounded-full text-xs font-bold shadow-lg transition-all flex items-center justify-center
+          ${on
+            ? 'w-8 h-8 bg-[#ED6A3B] text-white scale-110'
+            : 'h-7 px-2.5 bg-[#1C1C1C]/75 text-white hover:bg-[#1C1C1C]'}`}
+        style={{ right: 12, bottom: 'calc(var(--sab) + 12px)' }}
       >
-        {on ? '●' : marks.length ? String(marks.length) : '⌖'}
+        {on ? '●' : marks.length ? `标注 ${marks.length}` : '标注'}
       </button>
 
       {/* 面板 */}

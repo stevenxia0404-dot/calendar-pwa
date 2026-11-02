@@ -5,6 +5,14 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* 底部安全区（home indicator / 手势条）。
+     单独抽成变量有两个原因：
+     1. 支持 env() 的浏览器上跟直接写 env() 完全一样；
+     2. 开发期的设备画布要模拟不同机型的安全区高度 ——
+        iframe 里 env(safe-area-inset-bottom) 恒为 0，
+        覆盖这个变量就能模拟出「真 iPhone 上底部留 34px」的效果。 */
+  --sab: env(safe-area-inset-bottom, 0px);
 }
 
 @media (prefers-color-scheme: dark) {
