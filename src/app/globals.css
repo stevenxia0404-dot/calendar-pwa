@@ -99,6 +99,30 @@ body::before {
     -webkit-backdrop-filter: blur(30px) saturate(1.5);
   }
 
+  /* 输入区胶囊 —— 文字态与语音态是**同一张卡**。
+     同样的底色、同样的毛玻璃、同样的圆角边框、同样的最小高度。
+
+     为什么要抽出来：语音态以前是「波形一行 + 文案一行」，
+     整颗胶囊长高一倍。底部输入区是 fixed 钉在屏幕底部的，
+     它一长高，文档流里的占位块也跟着长，月历就被顶掉一截 ——
+     切换输入方式时整个页面在动。现在两种形态共用这一张卡，
+     只换内容，不换尺寸。
+
+     min-height 而不是 height：文字多了胶囊要能向上长高（底边不动），
+     但空着的时候不能比 54px 更矮。
+
+     54px 是算出来的：36px 高的按钮 + 上下各 8px 内边距 + 上下各 1px 边框。
+     语音态用 height 写死同一个 54px，两种形态切换时像素级对齐。 */
+  .capsule-bar {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(30px) saturate(1.4);
+    -webkit-backdrop-filter: blur(30px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 2px 16px rgba(28, 28, 28, 0.06);
+    border-radius: 1rem;
+    min-height: 54px;
+  }
+
   /* 弹出来的卡片（设置、日期详情、类别清单）——
      它们浮在最上层且下面全模糊，所以底色要更接近实心，
      否则叠在模糊层上会显脏。 */

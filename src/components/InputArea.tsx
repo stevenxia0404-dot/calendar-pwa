@@ -37,10 +37,11 @@ import VoiceCapsule from '@/components/VoiceCapsule';
 /* ==================== 图标 ==================== */
 
 /** 声波图标 —— 语音输入的入口。
-    画成三条递增的波，比麦克风更像「正在听」，也更像参考图里那种样式。 */
+    画成三条递增的波，比麦克风更像「正在听」，也更像参考图里那种样式。
+    描边 2（原来 1.8）：这个图标只有 20px 宽，1.8 的线在手机上细得几乎看不见。 */
 function AudioWaveIcon() {
   return (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" viewBox="0 0 24 24">
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" viewBox="0 0 24 24">
       <path d="M7 10v4" />
       <path d="M12 6v12" />
       <path d="M17 9v6" />
@@ -315,15 +316,22 @@ export default function InputArea({
             />
           ) : (
             /* 横排一行：声波图标 · 文字 · 纸飞机。
-               文字多了整颗胶囊向上长高（底边钉在屏幕底部不动）。 */
-            <div className="rounded-2xl bg-white/72 backdrop-blur-md border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] flex items-end gap-2 px-2 py-2">
-              {/* 左：语音图标。点它切到语音态，图标会变成键盘。 */}
+               文字多了整颗胶囊向上长高（底边钉在屏幕底部不动）。
+               capsule-bar：跟语音态共用同一张卡 —— 切换输入方式时尺寸不变，
+               页面不会被顶起来。 */
+            <div className="capsule-bar flex items-end gap-2 px-2 py-2">
+              {/* 左：语音图标。点它切到语音态，图标会变成键盘。
+
+                  样式 = 以前的 hover 态（白圆底）常驻：
+                  原来只有鼠标悬停才浮出白圆底，图标本身还是浅灰，
+                  在半透明白卡上看不清 —— 现在白圆底一直都在，
+                  线条也加深到 #3A3A3A，一眼就能找到入口。 */}
               <button
                 ref={micBtnRef}
                 onClick={enterVoiceMode}
                 title="语音记录"
                 aria-label="语音记录"
-                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all hover:bg-white/70 text-[#5C5C5C]"
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all bg-white/70 hover:bg-white active:scale-95 text-[#3A3A3A]"
               >
                 <AudioWaveIcon />
               </button>

@@ -95,22 +95,29 @@ export default function MonthView({
       </div>
 
       {/* ==================== 四宫格 ====================
-          aspect-[3/2]：每块宽:高 = 3:2。
+          窄屏 aspect-[3/2]：每块宽:高 = 3:2。
           4:3 在手机上太夸张（单块 187×140，两排加起来 290px，
           会把月历压得只剩 4 行），3:2 是「明显加大但不挤」的平衡点。
+
+          宽屏改成定高 150px —— aspect 在 1280px 宽下会算出
+          单块 640×427、两排 840px，直接把月历卡片挤成一条缝
+          （实测桌面端月历只剩 30px）。宽屏空间富裕，
+          格子拉成宽扁的统计条，月历才拿得到该有的高度。
+
           shrink-0：高度固定，不跟月历抢空间。 */}
       <div className="grid grid-cols-2 gap-2.5 shrink-0">
         {statItems.map(s => (
           <button
             key={s.kind}
             onClick={() => onStatClick?.(s.kind)}
-            className="card-glass aspect-[3/2] rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-4 py-3.5 flex flex-col justify-end transition-all hover:bg-white/80 active:scale-[0.98]"
+            className="card-glass aspect-[3/2] md:aspect-auto md:h-[150px] rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-4 py-3.5 flex flex-col justify-end transition-all hover:bg-white/80 active:scale-[0.98]"
           >
             {/* 文字在左下角、数字在右下角 —— 同一行两端对齐。
-                标签颜色 #4A4A4A：原来 #A0A0A0 在半透明卡片上太淡看不清。 */}
+                标签加粗加深：#A0A0A0 + font-medium 在半透明卡片上太淡，
+                一眼看不清这四块是什么。数字也跟一档，两边份量才配得上。 */}
             <div className="flex items-end justify-between gap-2 w-full">
-              <span className="text-[15px] font-medium text-[#4A4A4A] leading-none">{s.label}</span>
-              <span className="text-4xl font-medium tabular-nums leading-none" style={{ color: s.color }}>{s.n}</span>
+              <span className="text-[15px] font-bold text-[#3A3A3A] leading-none">{s.label}</span>
+              <span className="text-4xl font-semibold tabular-nums leading-none" style={{ color: s.color }}>{s.n}</span>
             </div>
           </button>
         ))}
