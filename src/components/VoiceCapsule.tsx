@@ -17,11 +17,37 @@ import Waveform from '@/components/Waveform';
 import type { VoicePhase } from '@/lib/useVoiceRecorder';
 
 /** 录音中（松手就发送）—— 雾青绿 */
-const GLOW_RECORD = 'rgba(94,157,133,0.46)';
-const DOT_RECORD = '#4E7D6C';
+const GLOW_RECORD = '76,152,118';
 /** 上滑取消 —— 暖砖红 */
-const GLOW_CANCEL = 'rgba(190,106,88,0.46)';
+const GLOW_CANCEL = '186,98,80';
+const DOT_RECORD = '#3E6B57';
 const DOT_CANCEL = '#A65C48';
+
+/**
+ * 外层光斑：胶囊外围的大范围洇开。
+ *
+ * 范围要够大、衰减要够慢 —— 浅色底上低饱和色的光斑很吃范围，
+ * 范围一小就什么都看不见。
+ *
+ * 注意两个颜色的浓度不一样：绿在米白底上的对比天然弱于红
+ * （人眼对红绿的光感受不对称，红在浅底上更跳）。
+ * 如果两边用同一个浓度，结果就是「取消态很醒目、录音态没变化」，
+ * 用户会以为没录上。所以绿这边加浓一点，让两种状态的视觉强度对齐。
+ */
+function outerGlow(rgb: string, alpha: number): string {
+  return `radial-gradient(ellipse 74% 66% at 50% 56%, rgba(${rgb},${alpha}) 0%, rgba(${rgb},${alpha * 0.3}) 46%, transparent 82%)`;
+}
+
+/**
+ * 内层染色：盖在胶囊自己身上的一层薄色。
+ *
+ * 为什么需要它：光斑在胶囊**后面**，而胶囊是不透明的 ——
+ * 光斑最浓的中心会被整个挡住，只有衰减后的边缘透出来。
+ * 所以胶囊内部要单独染一层，否则「发光」的感觉出不来。
+ */
+function innerGlow(rgb: string, alpha: number): string {
+  return `radial-gradient(ellipse 92% 84% at 50% 50%, rgba(${rgb},${alpha}) 0%, transparent 74%)`;
+}
 
 export interface VoiceCapsuleProps {
   phase: VoicePhase;
@@ -56,8 +82,11 @@ export default function VoiceCapsule({
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onClick, onExit,
 }: VoiceCapsuleProps) {
   const recording = phase === 'recording';
-  const glowColor = cancelArmed ? GLOW_CANCEL : GLOW_RECORD;
-  const dotColor = cancelArmed ? DOT_CANCEL : DOT_RECORD;
+  // 绿加浓、红用常规浓度 —— 让两种状态的视觉强度对齐
+  const isCancel = cancelArmed;
+  const glowColor = isCancel ? GLOW_CANCEL : GLOW_RECORD;
+  const glowAlpha = isCancel ? 0.44 : 0.56;
+  const dotColor = isCancel ? DOT_CANCEL : DOT_RECORD;
 
   // 录音中才洇光斑 —— 光斑是「正在听」的信号，不该常亮
   const showGlow = recording || phase === 'transcribing';
@@ -70,30 +99,53 @@ export default function VoiceCapsule({
 
   return (
     <div className="relative" data-testid="voice-capsule">
-      {/* 洇开的光斑 —— 比胶囊大一点，不盖全屏 */}
+      {/* 外层光斑 —— 胶囊外围的大范围洇开。
+          在胶囊下面（z-0），胶囊在 z-10，所以最浓的部分被胶囊挡住是故意的：
+          外面那圈才是要给人看的「光晕」。胶囊内部另有薄薄一层染色。 */}
       {showGlow && (
         <div
           aria-hidden="true"
           data-testid="voice-glow"
-          className="absolute pointer-events-none"
+          className="absolute pointer-events-none z-0"
           style={{
-            inset: '-72px -44px',
-            background: `radial-gradient(ellipse 62% 58% at 50% 62%, ${glowColor} 0%, ${glowColor.replace(/[\d.]+\)$/, '0.14)')} 42%, transparent 72%)`,
+            inset: '-120px -70px',
+            background: outerGlow(glowColor, glowAlpha),
           }}
         />
       )}
 
       <div
-        className="relative rounded-2xl bg-[#F3F1ED] px-3 py-2.5 flex flex-col gap-2 touch-none"
-        style={{ touchAction: 'none' }}
+        className="relative z-10 rounded-2xl bg-[#F3F1ED] px-3 py-2.5 flex flex-col gap-2"
+        style={{
+          touchAction: 'none',
+          // 长按会触发浏览器原生的选词与浮动工具条 ——
+          // 那是「我要选中这段字」的行为，不是「我要按住说话」的行为。
+          // touch-action: none 只挡滚动和缩放，挡不住选词，得单独关。
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          // iOS 长按还会弹「复制/粘贴/查找」的原生菜单
+          WebkitTouchCallout: 'none',
+        } as React.CSSProperties}
+        onContextMenu={e => e.preventDefault()}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onClick={onClick}
       >
+        {/* 内层染色 —— 给胶囊染一点环境色。
+            内容在它之上（z-30），文字和点阵不会被染。 */}
+        {showGlow && (
+          <div
+            aria-hidden="true"
+            data-testid="voice-glow-inner"
+            className="absolute inset-0 rounded-2xl pointer-events-none z-20"
+            style={{ background: innerGlow(glowColor, isCancel ? 0.24 : 0.30) }}
+          />
+        )}
+
         {/* 顶部：圆点阵 + 计时 */}
-        <div className="flex items-center gap-3">
+        <div className="relative z-30 flex items-center gap-3">
           <Waveform
             getLevel={getLevel}
             active={recording}
@@ -108,7 +160,7 @@ export default function VoiceCapsule({
         </div>
 
         {/* 底部：文案 + 控件 */}
-        <div className="flex items-center gap-2">
+        <div className="relative z-30 flex items-center gap-2">
           <button
             onClick={(e) => { e.stopPropagation(); onExit(); }}
             aria-label="收起语音输入，回到文字输入"
@@ -155,7 +207,7 @@ export default function VoiceCapsule({
 
         {/* 实时字幕（第 2 层浏览器语音才有） */}
         {interim && (
-          <p className="text-[12px] text-[#5C5C5C] leading-relaxed max-h-16 overflow-y-auto">
+          <p className="relative z-30 text-[12px] text-[#5C5C5C] leading-relaxed max-h-16 overflow-y-auto">
             {interim}
           </p>
         )}
