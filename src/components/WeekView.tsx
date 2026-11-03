@@ -165,7 +165,7 @@ export default function WeekView({
           {/* 时间刻度列 */}
           <div className="w-11 shrink-0">
             {Array.from({ length: AXIS_HOURS + 1 }, (_, i) => (
-              <div key={i} className="h-[44px] text-[10px] text-[#C0BDB8] text-right pr-1.5 -mt-1.5 first:mt-0">
+              <div key={i} className="h-[44px] text-[10px] text-[#9A9790] text-right pr-1.5 -mt-1.5 first:mt-0">
                 {AXIS_START + i}
               </div>
             ))}

@@ -188,7 +188,7 @@ function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: st
         )}
         <span
           className={`relative z-10 text-[13px] leading-none tabular-nums ${
-            !cell.inMonth ? 'text-[#C0BDB8]' : isToday ? 'text-white font-medium' : 'text-[#1C1C1C]'
+            !cell.inMonth ? 'text-[#9A9790]' : isToday ? 'text-white font-medium' : 'text-[#1C1C1C]'
           }`}
         >
           {cell.day}

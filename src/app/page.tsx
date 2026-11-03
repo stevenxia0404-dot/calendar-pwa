@@ -1280,7 +1280,7 @@ export default function Home() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
           <div className="bg-white rounded-2xl p-6 w-[var(--card-w)] max-w-full shadow-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-5">
-              <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明 <span className="text-[10px] font-normal text-[#C0BDB8]">v4.0</span></h2>
+              <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明 <span className="text-[10px] font-normal text-[#9A9790]">v4.0</span></h2>
               <button onClick={() => setShowHelp(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center transition-colors">&times;</button>
             </div>
 
@@ -1412,7 +1412,7 @@ export default function Home() {
                   {/* 导入历史 */}
                   {importGroups.length > 0 && (
                     <div className="border-t border-[#E8E4DF] pt-3">
-                      <p className="text-xs text-[#A0A0A0] mb-2">导入历史</p>
+                      <p className="text-xs text-[#8A8A8A] mb-2">导入历史</p>
                       <div className="space-y-1 max-h-32 overflow-y-auto">
                         {importGroups.map(g => (
                           <div key={g.id} className="flex items-center justify-between text-xs text-[#5C5C5C] py-1">
@@ -1548,7 +1548,7 @@ export default function Home() {
             <div className="p-5 space-y-5 overflow-y-auto flex-1">
               {/* 范围 */}
               <div>
-                <label className="text-xs text-[#A0A0A0] mb-2 block">哪段时间</label>
+                <label className="text-xs text-[#8A8A8A] mb-2 block">哪段时间</label>
                 <div className="grid grid-cols-4 gap-2">
                   {([['today', '今天'], ['week', '本周'], ['month', '本月'], ['custom', '自定义']] as const).map(([v, label]) => (
                     <button key={v} onClick={() => setExportRange(v)}
@@ -1574,7 +1574,7 @@ export default function Home() {
 
               {/* 格式 */}
               <div>
-                <label className="text-xs text-[#A0A0A0] mb-2 block">导出成什么</label>
+                <label className="text-xs text-[#8A8A8A] mb-2 block">导出成什么</label>
                 <div className="space-y-2">
                   {([
                     ['text', '文本', '贴邮件、写周报'],

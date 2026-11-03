@@ -33,19 +33,42 @@
   --card-w: 350px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* 这个 App **没有深色主题** —— 界面是固定的浅色设计：
+   壁纸 + 浅色毛玻璃卡片 + 深色文字，一整套都是写死的浅色。
+   所以这里**故意不跟随系统的深色模式**。
 
+   以前这里有一段 `@media (prefers-color-scheme: dark)` 把 --foreground
+   改成 #ededed（浅色）。看着像「支持深色模式」，实际后果是：
+   系统开着深色模式时，body 的文字色变成浅色，
+   而**所有没显式写 text- 色的元素都会继承它** ——
+   最典型的就是输入框和文本域：白底卡片上写浅色字，几乎看不见。
+   （实测：深色模式下 body color = rgb(237,237,237)，
+     而日期卡、项目卡、激活弹窗里的输入框全都没写文字色。）
+
+   深色模式没有收益，只有这类看不见字的 bug —— 去掉。 */
 body {
-  color: var(--foreground);
+  color: #171717;
   background-color: #F7F5F2;
   /* 壁纸移到了 body::before（见下）。
      body 本身只留底色 —— 遮罩和模糊都在背景层里做。 */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* 输入框与文本域 —— 显式指定文字色。
+   不依赖继承，是个硬保险：以后就算有人再加回深色模式，
+   输入框里的字也不会变浅。 */
+input,
+textarea,
+select {
+  color: #1C1C1C;
+}
+
+/* 占位符（提示语）—— Tailwind 默认给的是 gray-400 #9ca3af，
+   在白底上对比度只有 2.5:1，看着费劲。提到 #8A8A8A（约 3.5:1）：
+   比正文淡，但读得清。 */
+input::placeholder,
+textarea::placeholder {
+  color: #8A8A8A;
 }
 
 /* ==================== 壁纸层 ====================

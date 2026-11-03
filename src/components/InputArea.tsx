@@ -351,7 +351,7 @@ export default function InputArea({
                 }}
                 rows={1}
                 placeholder="发信息或按住说话"
-                className="flex-1 min-w-0 bg-transparent px-1 py-1.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#B4B2A9] resize-none max-h-24 overflow-y-auto block"
+                className="flex-1 min-w-0 bg-transparent px-1 py-1.5 text-[#1C1C1C] outline-none text-sm placeholder:text-[#8A8A8A] resize-none max-h-24 overflow-y-auto block"
               />
 
               {/* 右：纸飞机 = 发送 */}

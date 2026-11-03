@@ -122,7 +122,7 @@ export default function DayCard({
                         </div>
                       )}
                       {(e.location || e.people) && (
-                        <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>
+                        <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#9A9790]' : 'text-[#A0A0A0]'}`}>
                           {e.location}{e.location && e.people ? ' · ' : ''}{e.people}
                         </div>
                       )}
@@ -179,12 +179,12 @@ function EditForm({
   return (
     <div className="space-y-3">
       <div>
-        <label className="text-xs text-[#A0A0A0] mb-1 block">事项</label>
+        <label className="text-xs text-[#8A8A8A] mb-1 block">事项</label>
         <input type="text" value={form.title} onChange={ev => set({ title: ev.target.value })}
           className={inputCls} />
       </div>
       <div>
-        <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
+        <label className="text-xs text-[#8A8A8A] mb-1 block">日期</label>
         <input type="date" title="日期" value={form.date} onChange={ev => set({ date: ev.target.value })}
           className={inputCls} />
       </div>
@@ -193,7 +193,7 @@ function EditForm({
           留空 = 就这一天；填了 = 从开始日到结束日每天都算这件（月历上连成一条）。
           清空这个框就是撤销跨日，不是把日期删掉。 */}
       <div>
-        <label className="text-xs text-[#A0A0A0] mb-1 block">结束日期（跨日就填，可留空）</label>
+        <label className="text-xs text-[#8A8A8A] mb-1 block">结束日期（跨日就填，可留空）</label>
         <input type="date" title="结束日期" value={form.endDate} onChange={ev => set({ endDate: ev.target.value })}
           className={inputCls} />
         {form.endDate && form.endDate < form.date && (
@@ -203,12 +203,12 @@ function EditForm({
       {showTime && (
         <div className="flex gap-3">
           <div className="flex-1">
-            <label className="text-xs text-[#A0A0A0] mb-1 block">开始时间</label>
+            <label className="text-xs text-[#8A8A8A] mb-1 block">开始时间</label>
             <input type="time" title="开始时间" value={form.time} onChange={ev => set({ time: ev.target.value })}
               className={inputCls} />
           </div>
           <div className="flex-1">
-            <label className="text-xs text-[#A0A0A0] mb-1 block">结束时间</label>
+            <label className="text-xs text-[#8A8A8A] mb-1 block">结束时间</label>
             <input type="time" title="结束时间" value={form.endTime} onChange={ev => set({ endTime: ev.target.value })}
               className={inputCls} />
           </div>
@@ -217,9 +217,9 @@ function EditForm({
       {/* 项目标签 —— 点一下就归属到这个项目，再点一下取消。
           项目本身没有日期，它是「这些事属于它」的容器。 */}
       <div>
-        <label className="text-xs text-[#A0A0A0] mb-1 block">属于哪个项目</label>
+        <label className="text-xs text-[#8A8A8A] mb-1 block">属于哪个项目</label>
         {projects.length === 0 ? (
-          <p className="text-xs text-[#C0BDB8]">还没有项目 —— 去四宫格「项目」格点加号建一个</p>
+          <p className="text-xs text-[#9A9790]">还没有项目 —— 去四宫格「项目」格点加号建一个</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
             {projects.map(p => {
@@ -243,12 +243,12 @@ function EditForm({
 
       <div className="flex gap-3">
         <div className="flex-1">
-          <label className="text-xs text-[#A0A0A0] mb-1 block">地点</label>
+          <label className="text-xs text-[#8A8A8A] mb-1 block">地点</label>
           <input type="text" value={form.location} onChange={ev => set({ location: ev.target.value })}
             className={inputCls} placeholder="教室/会议室" />
         </div>
         <div className="flex-1">
-          <label className="text-xs text-[#A0A0A0] mb-1 block">人员</label>
+          <label className="text-xs text-[#8A8A8A] mb-1 block">人员</label>
           <input type="text" value={form.people} onChange={ev => set({ people: ev.target.value })}
             className={inputCls} placeholder="老师/同学" />
         </div>

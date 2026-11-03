@@ -220,7 +220,7 @@ function ProjectList({
                 <span className="w-2 h-2 rounded-full bg-[#7F77DD] shrink-0" aria-hidden />
                 <span className="flex-1 min-w-0 font-medium text-[#1C1C1C] truncate">{p.title}</span>
                 <span className="text-xs text-[#A0A0A0] shrink-0 tabular-nums">{n} 条</span>
-                <svg className="w-4 h-4 text-[#C0BDB8] shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                <svg className="w-4 h-4 text-[#9A9790] shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
               </button>
             );
           })}
@@ -262,13 +262,13 @@ function ProjectDetail({
           改了就丢是最糟的体验。显式保存跟日期卡的编辑表单一个风格。 */}
       <div className="space-y-3 mb-3">
         <div>
-          <label className="text-xs text-[#A0A0A0] mb-1 block">项目名</label>
+          <label className="text-xs text-[#8A8A8A] mb-1 block">项目名</label>
           <input value={name} onChange={e => setName(e.target.value)}
             className="w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm font-medium outline-none focus:border-[#1C1C1C]" />
         </div>
 
         <div>
-          <label className="text-xs text-[#A0A0A0] mb-1 block">项目简介</label>
+          <label className="text-xs text-[#8A8A8A] mb-1 block">项目简介</label>
           <textarea value={note} onChange={e => setNote(e.target.value)}
             placeholder="这个项目是干什么的、进展如何 —— 随便写"
             rows={3}
