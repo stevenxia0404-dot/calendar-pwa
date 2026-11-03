@@ -27,6 +27,8 @@ export interface ParsedResult {
   date: string;
   /** HH:mm，空串表示无时间 */
   time: string;
+  /** 跨日事件的结束日期 YYYY-MM-DD（含当天）；空串 = 不跨日 */
+  endDate: string;
   /** 剥离日期锚点后的干净描述 */
   title: string;
   /** 原话全文，永不丢 */
@@ -298,6 +300,164 @@ export interface ParseOptions {
   baseDate?: Date;
 }
 
+// ==================== 跨日表达 ====================
+//
+// 「21号到25号出差」「11月21日到23日培训」「下周一到周五带训」
+// —— 一件事占好几天，月历上要连成一条线，所以必须解出结束日期。
+//
+// 认不出来的原则：**宁可漏，不可错**。
+// 跨日的结束日期猜错了，界面上会画出一条连错位置的线，
+// 比不画更糟。所以每一步都要有明确的依据才认。
+
+/** 一个日期片段解出来的信息 */
+interface SpanHalf {
+  /** 完整日期 YYYY-MM-DD（只有日号时为 ''） */
+  date: string;
+  /** 只有日号时的月（1-12），0 = 没月 */
+  month: number;
+  /** 只有日号时的年 */
+  year: number;
+  /** 周几（0=周一 … 6=周日），-1 = 不是周型 */
+  weekday: number;
+  /** 「上周/本周/下周」的周偏移；null = 不带这个前缀 */
+  weekOffset: number | null;
+}
+
+/**
+ * 跨日匹配。
+ *
+ * 左半与右半各是一个日期片段，顺序很要紧：**长的排前面**，
+ * 否则「11月21日」会被「21日」抢走一半。
+ */
+const SPAN_RE = new RegExp(
+  '^(' +
+    '[0-9]{1,2}\\s*月\\s*[0-9]{1,2}\\s*[号日]' +          // 11月21日
+    '|[0-9]{1,2}\\s*[/]\\s*[0-9]{1,2}' +                   // 11/21
+    '|[上下这本]?\\s*周\\s*[一二三四五六日天]' +            // 下周一 / 周五
+    '|[0-9零〇一二两三四五六七八九十]{1,3}\\s*[号日]' +     // 21号
+  ')\\s*(?:到|至|~|～|—|–)\\s*(' +
+    '[0-9]{1,2}\\s*月\\s*[0-9]{1,2}\\s*[号日]' +
+    '|[0-9]{1,2}\\s*[/]\\s*[0-9]{1,2}' +
+    '|[上下这本]?\\s*周\\s*[一二三四五六日天]' +
+    '|[0-9零〇一二两三四五六七八九十]{1,3}\\s*[号日]' +
+  ')'
+);
+
+/**
+ * 解一个日期片段。
+ *
+ * 返回 month/year 的那一支是给「只给了日号」的情况用的 ——
+ * 「11月21日到23日」里，右半只有「23日」，月和年要跟左边借。
+ */
+function resolveSpanHalf(expr: string, base: Date): SpanHalf | null {
+  const s = expr.replace(/\s+/g, '');
+
+  // X月X号
+  let m = /^([0-9]{1,2})月([0-9]{1,2})[号日]$/.exec(s);
+  if (m) {
+    const month = parseInt(m[1], 10);
+    const day = parseInt(m[2], 10);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    let d = new Date(base.getFullYear(), month - 1, day);
+    if (d.getTime() < base.getTime()) d = new Date(base.getFullYear() + 1, month - 1, day);
+    return { date: toDateString(d), month, year: d.getFullYear(), weekday: -1, weekOffset: null };
+  }
+
+  // X/X
+  m = /^([0-9]{1,2})[/]([0-9]{1,2})$/.exec(s);
+  if (m) {
+    const month = parseInt(m[1], 10);
+    const day = parseInt(m[2], 10);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    let d = new Date(base.getFullYear(), month - 1, day);
+    if (d.getTime() < base.getTime()) d = new Date(base.getFullYear() + 1, month - 1, day);
+    return { date: toDateString(d), month, year: d.getFullYear(), weekday: -1, weekOffset: null };
+  }
+
+  // 上周X / 本周X / 下周X / 周X
+  //
+  // 注意「周五」和「下周五」不是一回事：
+  //   带前缀（上周/本周/下周）→ 日期自己就能定
+  //   不带前缀（「周五」）→ 哪个周五要看上下文（「下周一到周五」是下周五）
+  m = /^(上|下|这|本)?周([一二三四五六日天])$/.exec(s);
+  if (m) {
+    const wd = WEEKDAY_CN[m[2]];
+    if (wd === undefined) return null;
+    const hasPrefix = !!m[1];
+    const offset = m[1] === '上' ? -1 : m[1] === '下' ? 1 : 0;
+    const d = addDays(startOfWeek(base), offset * 7 + wd);
+    return {
+      // 没前缀 → 日期留空，等着继承左半的周偏移
+      date: hasPrefix ? toDateString(d) : '',
+      month: d.getMonth() + 1, year: d.getFullYear(),
+      weekday: wd,
+      weekOffset: hasPrefix ? offset : null,
+    };
+  }
+
+  // 只有日号（X号/X日）：月和年留给左边继承
+  m = /^([0-9零〇一二两三四五六七八九十]{1,3})[号日]$/.exec(s);
+  if (m) {
+    const day = parseNumber(m[1]);
+    if (day === null || day < 1 || day > 31) return null;
+    return { date: '', month: 0, year: 0, weekday: -1, weekOffset: null };
+  }
+
+  return null;
+}
+
+/**
+ * 匹配跨日表达。
+ *
+ * 返回 null 表示这不是一句跨日的事（或者认不准）—— 那就不跨日。
+ */
+export function matchSpan(text: string, base: Date): { start: string; end: string; text: string } | null {
+  const m = SPAN_RE.exec(text.trim());
+  if (!m) return null;
+
+  const left = resolveSpanHalf(m[1], base);
+  if (!left) return null;
+  const right = resolveSpanHalf(m[2], base);
+  if (!right) return null;
+
+  // 左半必须能给出一个确定的日期
+  if (!left.date) return null;
+
+  let endDate: string;
+  if (right.date) {
+    // 右半自带完整日期 → 直接用
+    endDate = right.date;
+  } else if (right.weekday >= 0) {
+    // 右半只给了星期几（「下周一到周五」）→ 继承左半的周偏移
+    if (left.weekOffset === null) return null;
+    const d = addDays(startOfWeek(base), left.weekOffset * 7 + right.weekday);
+    endDate = toDateString(d);
+  } else {
+    // 右半只给了日号（「11月21日到23日」）→ 月和年跟左半借
+    // 右半只给了日号 → 把日号抠出来
+    const dayNum = parseNumber((/^([0-9零〇一二两三四五六七八九十]{1,3})/.exec(m[2]) || [])[1] || '');
+    if (dayNum === null) return null;
+    if (!left.month) {
+      // 左半也没有月（「21号到23号」）→ 用基准日的月年
+      const d = new Date(base.getFullYear(), base.getMonth(), dayNum);
+      if (Number.isNaN(d.getTime())) return null;
+      endDate = toDateString(d);
+    } else {
+      const d = new Date(left.year, left.month - 1, dayNum);
+      if (Number.isNaN(d.getTime())) return null;
+      // 结束日比开始日早 → 跨月了（11月28日到12月3日）
+      endDate = toDateString(d);
+    }
+  }
+
+  // 结束早于开始 → 认不准，不跨日
+  if (endDate < left.date) return null;
+  // 跨度上限：超过 60 天多半是用户说错了
+  if ((new Date(endDate).getTime() - new Date(left.date).getTime()) / 86400000 > 60) return null;
+
+  return { start: left.date, end: endDate, text: m[0] };
+}
+
 /**
  * 解析一句自然语言，返回日期、时间、干净描述。
  *
@@ -323,6 +483,7 @@ export function parseText(input: string, options: ParseOptions = {}): ParsedResu
     return {
       date: toDateString(base),
       time: '',
+      endDate: '',
       title: '',
       raw,
       dateConfirmed: 0,
@@ -339,12 +500,34 @@ export function parseText(input: string, options: ParseOptions = {}): ParsedResu
     text = text.slice(0, t.start) + ' ' + text.slice(t.end);
   }
 
+  // 1.5) 再看跨日。
+  //     「21号到25号出差」这一句里有两个日期，单日锚点只能解出前一个，
+  //     后一个会留在描述里变成脏文字。跨日必须整段一起解、整段一起剥。
+  let endDate = '';
+  let spanText = '';
+  const span = matchSpan(text, base);
+  if (span) {
+    // 跨日段必须也在句首 —— 「上周五的排班从21号改到25号」
+    // 里的「21号改到25号」是内容的一部分，不是这件事的日期。
+    const beforeSpan = text.slice(0, text.indexOf(span.text)).trim();
+    if (beforeSpan === '') {
+      endDate = span.end;
+      spanText = span.text;
+      text = text.slice(text.indexOf(span.text) + span.text.length);
+    }
+  }
+
   // 2) 再找日期锚点。只在句首匹配才剥离 —— 句中的日期词是内容的一部分。
   let date = toDateString(base);
   let matchedAnchor: string | null = null;
   let dateConfirmed: 0 | 1 = 0;
 
-  for (const rule of ANCHOR_RULES) {
+  // 跨日已经解出起止日期，就不再走单日锚点（免得把「21号」当成起始日又解一遍）
+  if (spanText) {
+    date = span!.start;
+    matchedAnchor = spanText;
+    dateConfirmed = 1;
+  } else for (const rule of ANCHOR_RULES) {
     const m = text.match(rule.regex);
     if (!m || m.index === undefined) continue;
 
@@ -394,7 +577,7 @@ export function parseText(input: string, options: ParseOptions = {}): ParsedResu
     dateConfirmed = 1;
   }
 
-  return { date, time, title, raw, dateConfirmed, matchedAnchor };
+  return { date, time, endDate, title, raw, dateConfirmed, matchedAnchor };
 }
 
 /**

@@ -17,6 +17,8 @@ export interface DayCardProps {
   editingEventId: string | null;
   editForm: {
     title: string; date: string; time: string; endTime: string;
+    /** 跨日结束日期（含当天）；空 = 不跨日 */
+    endDate: string;
     location: string; people: string;
   };
   onEditFormChange: (form: DayCardProps['editForm']) => void;
@@ -70,6 +72,11 @@ export default function DayCard({
                         <div className="font-medium text-[#1C1C1C] truncate">{e.title}</div>
                         {e.dateConfirmed === 0 && <PendingBadge onClick={() => onStartEdit(e)} />}
                       </div>
+                      {e.endDate && e.endDate > e.date && (
+                        <div className="text-[11px] text-[#ED6A3B] mt-0.5 truncate">
+                          跨到 {e.endDate.slice(5).replace('-', '月')}日
+                        </div>
+                      )}
                       {(e.location || e.people) && (
                         <div className="text-xs text-[#A0A0A0] mt-0.5 truncate">
                           {e.location}{e.location && e.people ? ' · ' : ''}{e.people}
@@ -105,6 +112,11 @@ export default function DayCard({
                         <div className={`font-medium truncate ${e.completed ? 'line-through text-[#A0A0A0]' : 'text-[#1C1C1C]'}`}>{e.title}</div>
                         {e.dateConfirmed === 0 && <PendingBadge onClick={() => onStartEdit(e)} />}
                       </div>
+                      {e.endDate && e.endDate > e.date && (
+                        <div className="text-[11px] text-[#ED6A3B] mt-0.5 truncate">
+                          跨到 {e.endDate.slice(5).replace('-', '月')}日
+                        </div>
+                      )}
                       {(e.location || e.people) && (
                         <div className={`text-xs mt-0.5 truncate ${e.completed ? 'line-through text-[#C0BDB8]' : 'text-[#A0A0A0]'}`}>
                           {e.location}{e.location && e.people ? ' · ' : ''}{e.people}
@@ -170,6 +182,18 @@ function EditForm({
         <label className="text-xs text-[#A0A0A0] mb-1 block">日期</label>
         <input type="date" title="日期" value={form.date} onChange={ev => set({ date: ev.target.value })}
           className={inputCls} />
+      </div>
+
+      {/* 结束日期 —— 跨日安排。
+          留空 = 就这一天；填了 = 从开始日到结束日每天都算这件（月历上连成一条）。
+          清空这个框就是撤销跨日，不是把日期删掉。 */}
+      <div>
+        <label className="text-xs text-[#A0A0A0] mb-1 block">结束日期（跨日就填，可留空）</label>
+        <input type="date" title="结束日期" value={form.endDate} onChange={ev => set({ endDate: ev.target.value })}
+          className={inputCls} />
+        {form.endDate && form.endDate < form.date && (
+          <p className="text-[10px] text-[#A65C48] mt-1">结束日期早于开始日期 —— 存不进去</p>
+        )}
       </div>
       {showTime && (
         <div className="flex gap-3">

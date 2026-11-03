@@ -25,6 +25,8 @@ export interface ImportDraft {
   time: string;
   /** 结束时间 HH:mm */
   endTime: string;
+  /** 跨日事件的结束日期 YYYY-MM-DD（含当天）；空 = 不跨日 */
+  endDate: string;
   title: string;
   location: string;
   people: string;
@@ -122,6 +124,8 @@ export function normalizeDate(v: string): string {
 export interface ColumnMap {
   date: number; time: number; endTime: number; content: number;
   location: number; people: number; note: number;
+  /** 「结束日期」列 —— 跨日。没有这列就是 -1（不跨日） */
+  endDate: number;
 }
 
 /**
@@ -146,8 +150,11 @@ export function mapColumns(header: string[]): ColumnMap {
     return -1;
   };
 
-  // 顺序要紧：结束时间先认，否则会被「时间」抢走
+  // 顺序要紧：
+  //   结束时间先认，否则会被「时间」抢走（它也包含「时间」）
+  //   结束日期比「日期」先认，否则「结束日期」会被「日期」抢走（它也包含「日期」）
   const endTime = find(['结束时间']);
+  const endDate = find(['结束日期']);
   const time = find(['开始时间', '时间']);
   const date = find(['日期']);
   const content = find(['内容', '事项', '日程', '标题']);
@@ -155,7 +162,7 @@ export function mapColumns(header: string[]): ColumnMap {
   const people = find(['人员', '参与人', '教员']);
   const note = find(['备注', '描述', '说明', '原话']);
 
-  return { date, time, endTime, content, location, people, note };
+  return { date, time, endTime, endDate, content, location, people, note };
 }
 
 /**
@@ -175,7 +182,8 @@ export function parseImportRows(text: string, hasHeader: boolean): ImportDraft[]
   const delimiter = detectDelimiter(lines[0]);
 
   // 表头存在时按表头映射列，否则按标准七列的位置
-  let idx = { date: 0, time: 1, endTime: 2, content: 3, location: 4, people: 5, note: 6 };
+  // 没有表头时按标准七列的位置；「结束日期」没有表头就没法认（-1）
+  let idx = { date: 0, time: 1, endTime: 2, content: 3, location: 4, people: 5, note: 6, endDate: -1 };
   let start = 0;
 
   if (hasHeader) {
@@ -192,6 +200,7 @@ export function parseImportRows(text: string, hasHeader: boolean): ImportDraft[]
     const date = normalizeDate(pick(idx.date));
     const time = normalizeTime(pick(idx.time));
     const endTime = normalizeTime(pick(idx.endTime));
+    let endDate = normalizeDate(pick(idx.endDate));
     const content = pick(idx.content);
     const location = pick(idx.location);
     const people = pick(idx.people);
@@ -202,10 +211,15 @@ export function parseImportRows(text: string, hasHeader: boolean): ImportDraft[]
     // 整行没有任何可用的信息，跳过（避免导入一堆空行）
     if (!date && !content) continue;
 
+    // 结束日期早于开始日期 → 当成没填。
+    // 宁可少一个字段，也不能把一条明显错的数据写进库里。
+    if (endDate && date && endDate < date) endDate = '';
+
     drafts.push({
       date,
       time,
       endTime,
+      endDate,
       title: content || '未命名',
       location,
       people,
@@ -349,6 +363,8 @@ export function xlsxRowToTemplateCells(row: unknown[], idx: ColumnMap): string[]
   const datePart = pickPart(idx.date);
   const timePart = pickPart(idx.time);
   const endPart = pickPart(idx.endTime);
+  // 结束日期是纯日期列，不能用 pickPart 取时间那一半
+  const endDate = normalizeDate(pick(idx.endDate));
 
   const date = datePart.date;
   let time = timePart.time;
@@ -359,7 +375,7 @@ export function xlsxRowToTemplateCells(row: unknown[], idx: ColumnMap): string[]
   // 这不是猜：值就在那个单元格里，只是被并进了一列。
   if (!time && datePart.time) time = datePart.time;
 
-  return [date, time, endTime, pick(idx.content), pick(idx.location), pick(idx.people), pick(idx.note)];
+  return [date, time, endTime, pick(idx.content), pick(idx.location), pick(idx.people), pick(idx.note), endDate];
 }
 
 /**
@@ -375,7 +391,7 @@ export function xlsxRowToTemplateCells(row: unknown[], idx: ColumnMap): string[]
 export function looksLikeHeader(firstLine: string): boolean {
   if (!firstLine) return false;
   const cells = parseCsvLine(firstLine, detectDelimiter(firstLine));
-  const names = ['日期', '时间', '事项', '内容', '地点', '人员', '备注', '结束时间', '标题', '日程'];
+  const names = ['日期', '时间', '事项', '内容', '地点', '人员', '备注', '结束时间', '结束日期', '标题', '日程'];
   const hit = cells.some(c => names.some(n => c.includes(n)));
   if (!hit) return false;
   // 第一格是合法日期 → 这是数据行，不是表头

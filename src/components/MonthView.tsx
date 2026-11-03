@@ -17,6 +17,7 @@ import { useMemo } from 'react';
 import {
   MonthEvent, MonthCell, buildMonthGrid, monthLabel, lineColor, monthStats,
 } from '@/lib/monthLogic';
+import type { SpanPos } from '@/lib/monthLogic';
 
 export interface MonthViewProps {
   /** 当前显示的月份 */
@@ -126,6 +127,38 @@ export default function MonthView({
   );
 }
 
+/* ==================== 划线的形状 ==================== */
+
+/**
+ * 划线按「跨日位置」分四种形状。
+ *
+ * 单日：居中短横线，两端圆头（跟以前的观感完全一样）。
+ *
+ * 跨日：满格宽，而且左右各多伸 4px（`w-[calc(100%+8px)] -mx-1`）。
+ * 那 4px 正好是格子之间的间距 —— 线伸进去，跟相邻格子的线**首尾相接**，
+ * 于是一件事连着好几天，看上去就是一条完整的线。
+ *
+ * 端点形态也要区分，否则看得出「这里是接缝」：
+ *   start 第一天 —— 左端圆头、右端方头（右边还连着）
+ *   mid   中间   —— 两端都方头
+ *   end   最后一天 —— 左端方头、右端圆头
+ *
+ * 跨周（从上一行接到下一行）时，线会顶到月历卡片的左右内边距 ——
+ * 两段各自顶边，不用箭头提示，意思是「这件事还没完」。
+ */
+function lineClass(span: SpanPos): string {
+  switch (span) {
+    case 'start':
+      return 'w-[calc(100%+8px)] -mx-1 rounded-l-full rounded-r-none';
+    case 'mid':
+      return 'w-[calc(100%+8px)] -mx-1 rounded-none';
+    case 'end':
+      return 'w-[calc(100%+8px)] -mx-1 rounded-l-none rounded-r-full';
+    default:
+      return 'w-[28px] mx-auto rounded-full';
+  }
+}
+
 /* ==================== 单个日期格 ==================== */
 
 function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: string) => void }) {
@@ -165,12 +198,15 @@ function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: st
       {/* 事件横线 —— 一件事一条，按类型分颜色。
           最多画 4 条：格子高度有限，再多就挤到下一行去了。
           超过 4 条显示 +N。
-          线条加粗一倍（2.5px → 5px）：太细在手机上几乎看不见。 */}
-      <span className="flex flex-col items-center gap-[3px] mt-[3px] w-full px-[3px]">
+          线条加粗一倍（2.5px → 5px）：太细在手机上几乎看不见。
+
+          跨日事件的线是**满格宽**的，跟相邻格子的线接成一条；
+          单日事件仍是居中的短横线 —— 一眼能分出「这件事占了几天」。 */}
+      <span className="flex flex-col items-center gap-[3px] mt-[3px] w-full">
         {cell.lines.slice(0, 4).map(l => (
           <span
             key={l.id}
-            className="block w-full max-w-[28px] h-[5px] rounded-full"
+            className={`block h-[5px] ${lineClass(l.span)}`}
             style={{ background: lineColor(l.type, l.completed) }}
             title={l.title}
           />

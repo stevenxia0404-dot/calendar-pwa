@@ -10,6 +10,8 @@ export interface ScheduleEvent {
   date: string;
   time: string;
   endTime: string;
+  /** 跨日事件的结束日期（含当天，YYYY-MM-DD）；空 = 不跨日 */
+  endDate?: string;
   location: string;
   people: string;
   raw: string;

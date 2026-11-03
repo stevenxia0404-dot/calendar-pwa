@@ -7,7 +7,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildMonthGrid, monthStats, lineColor, monthLabel,
+  buildMonthGrid, monthStats, lineColor, monthLabel, spanDays,
   type MonthEvent,
 } from '../src/lib/monthLogic.ts';
 
@@ -143,5 +143,139 @@ describe('monthLabel —— 月份名', () => {
   test('不带年份', () => {
     assert.equal(monthLabel(11), '11月');
     assert.equal(monthLabel(1), '1月');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 划线排序：日程 → 任务 → 项目
+//
+// 为什么要有这条：一天里可能同时有日程、任务、项目好几条线，
+// 全靠颜色认容易看花。固定次序让「日程」永远在最上面。
+// ---------------------------------------------------------------------------
+
+describe('格子里划线的排列次序', () => {
+  test('日程 → 任务 → 项目，从上至下', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'p', date: '2026-11-02', type: 'project' }),
+      ev({ id: 'k', date: '2026-11-02', type: 'task' }),
+      ev({ id: 'e', date: '2026-11-02', type: 'event' }),
+    ], new Date(2026, 10, 2));
+    const cell = g.cells.find(c => c.date === '2026-11-02')!;
+    assert.deepEqual(cell.lines.map(l => l.type), ['event', 'task', 'project']);
+  });
+
+  test('输入顺序打乱也不影响结果（排序是稳定的规则，不靠运气）', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 't1', date: '2026-11-02', type: 'task' }),
+      ev({ id: 'e1', date: '2026-11-02', type: 'event' }),
+      ev({ id: 't2', date: '2026-11-02', type: 'task' }),
+      ev({ id: 'p1', date: '2026-11-02', type: 'project' }),
+    ], new Date(2026, 10, 2));
+    const cell = g.cells.find(c => c.date === '2026-11-02')!;
+    assert.deepEqual(cell.lines.map(l => l.type), ['event', 'task', 'task', 'project']);
+    // 同类型内部保持输入顺序（t1 在 t2 前面）
+    assert.deepEqual(cell.lines.map(l => l.id), ['e1', 't1', 't2', 'p1']);
+  });
+
+  test('没见过的类型排最后，不抢前三类的位置', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'x', date: '2026-11-02', type: 'note' }),
+      ev({ id: 'e', date: '2026-11-02', type: 'event' }),
+    ], new Date(2026, 10, 2));
+    const cell = g.cells.find(c => c.date === '2026-11-02')!;
+    assert.deepEqual(cell.lines.map(l => l.id), ['e', 'x']);
+  });
+
+  test('完成的记录仍留在自己那一类里，不单独沉底', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'k', date: '2026-11-02', type: 'task', completed: true }),
+      ev({ id: 'e', date: '2026-11-02', type: 'event' }),
+    ], new Date(2026, 10, 2));
+    const cell = g.cells.find(c => c.date === '2026-11-02')!;
+    assert.deepEqual(cell.lines.map(l => l.id), ['e', 'k']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 跨日事件：一件事占好几天，月历上要连成一条
+// ---------------------------------------------------------------------------
+
+describe('跨日事件占哪几天', () => {
+  test('没有结束日期 → 只占一天', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'a', date: '2026-11-21' }),
+    ], new Date(2026, 10, 2));
+    const days = g.cells.filter(c => c.lines.some(l => l.id === 'a'));
+    assert.equal(days.length, 1);
+    assert.equal(days[0].lines[0].span, 'single');
+  });
+
+  test('21 号到 23 号 → 三天都有线，位置依次是 start / mid / end', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'a', date: '2026-11-21', endDate: '2026-11-23' }),
+    ], new Date(2026, 10, 2));
+    const d21 = g.cells.find(c => c.date === '2026-11-21')!;
+    const d22 = g.cells.find(c => c.date === '2026-11-22')!;
+    const d23 = g.cells.find(c => c.date === '2026-11-23')!;
+    assert.equal(d21.lines[0].span, 'start');
+    assert.equal(d22.lines[0].span, 'mid');
+    assert.equal(d23.lines[0].span, 'end');
+    // 20 号和 24 号不能有它
+    assert.equal(g.cells.find(c => c.date === '2026-11-20')!.lines.length, 0);
+    assert.equal(g.cells.find(c => c.date === '2026-11-24')!.lines.length, 0);
+  });
+
+  test('跨到下个月：11 月这边算 mid（从上月延续过来的）', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'a', date: '2026-10-28', endDate: '2026-11-03' }),
+    ], new Date(2026, 10, 2));
+    // 11/1 落在跨度中间 → mid
+    assert.equal(g.cells.find(c => c.date === '2026-11-01')!.lines[0].span, 'mid');
+    // 11/3 是最后一天 → end
+    assert.equal(g.cells.find(c => c.date === '2026-11-03')!.lines[0].span, 'end');
+    // 10 月那边才是 start —— 位置按整个跨度算，不按当前月算
+    const g10 = buildMonthGrid(2026, 10, [
+      ev({ id: 'a', date: '2026-10-28', endDate: '2026-11-03' }),
+    ], new Date(2026, 10, 2));
+    assert.equal(g10.cells.find(c => c.date === '2026-10-28')!.lines[0].span, 'start');
+  });
+
+  test('结束日期等于开始日期 → 仍是单天，不是跨日', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'a', date: '2026-11-21', endDate: '2026-11-21' }),
+    ], new Date(2026, 10, 2));
+    assert.equal(g.cells.find(c => c.date === '2026-11-21')!.lines[0].span, 'single');
+  });
+
+  test('结束日期早于开始日期（脏数据）→ 当单天处理，不画出一串线', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'a', date: '2026-11-21', endDate: '2026-11-19' }),
+    ], new Date(2026, 10, 2));
+    const days = g.cells.filter(c => c.lines.some(l => l.id === 'a'));
+    assert.equal(days.length, 1);
+    assert.equal(days[0].lines[0].span, 'single');
+  });
+
+  test('结束日期离谱（隔了一年）→ 跨度封顶 60 天，不把月历撑爆', () => {
+    // spanDays 本身封顶 60 天
+    assert.equal(spanDays('2026-11-21', '2027-11-21').length, 60);
+    // 月历里只出现本月内的那些天（11/21 ~ 11/30 共 10 天）
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'a', date: '2026-11-21', endDate: '2027-11-21' }),
+    ], new Date(2026, 10, 2));
+    const days = g.cells.filter(c => c.lines.some(l => l.id === 'a'));
+    assert.equal(days.length, 10);
+    assert.equal(days[0].date, '2026-11-21');
+    assert.equal(days[9].date, '2026-11-30');
+  });
+
+  test('跨日事件仍然按类型排序（任务不会插到日程前面）', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'span', date: '2026-11-21', endDate: '2026-11-23', type: 'project' }),
+      ev({ id: 'k', date: '2026-11-22', type: 'task' }),
+      ev({ id: 'e', date: '2026-11-22', type: 'event' }),
+    ], new Date(2026, 10, 2));
+    const d22 = g.cells.find(c => c.date === '2026-11-22')!;
+    assert.deepEqual(d22.lines.map(l => l.id), ['e', 'k', 'span']);
   });
 });

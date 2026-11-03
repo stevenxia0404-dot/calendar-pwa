@@ -244,9 +244,10 @@ describe('真 xlsx：Excel 里敲的时间能进来', () => {
     const idx = mapColumns(header);
     const out = sheet.slice(1).map(r => xlsxRowToTemplateCells(r, idx));
 
-    assert.deepEqual(out[0], ['2026-11-20', '08:50', '10:30', '初始训练-模拟航班', '青浦B777经济舱', '张教员', '']);
-    assert.deepEqual(out[1], ['2026-11-21', '12:50', '13:50', '团队周会', 'C楼201', '全组', '']);
-    assert.deepEqual(out[2], ['2026-11-22', '', '', '整理文档', '', '', '培训材料归档']);
+    // 八列：末尾多一个「结束日期」，没有就是空串
+    assert.deepEqual(out[0], ['2026-11-20', '08:50', '10:30', '初始训练-模拟航班', '青浦B777经济舱', '张教员', '', '']);
+    assert.deepEqual(out[1], ['2026-11-21', '12:50', '13:50', '团队周会', 'C楼201', '全组', '', '']);
+    assert.deepEqual(out[2], ['2026-11-22', '', '', '整理文档', '', '', '培训材料归档', '']);
   });
 
   test('走完整条链路后，时间还在、类型也没被降级', async () => {

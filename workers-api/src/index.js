@@ -301,7 +301,24 @@ function normalizeEvent(body) {
     return { ok: false, error: '结束时间格式不正确，应为 HH:MM' };
   }
 
-  const type = body.type === 'task' ? 'task' : 'event';
+  // 结束日期（跨日）：空串 = 不跨日；有值必须是合法日期且不早于开始日。
+  const endDate = typeof body.endDate === 'string' ? body.endDate.trim() : '';
+  if (endDate) {
+    if (!isValidDateString(endDate)) {
+      return { ok: false, error: '结束日期格式不正确，应为 YYYY-MM-DD' };
+    }
+    // 结束日早于开始日 —— 那是脏数据，写进去会让月历画不出线
+    if (endDate < date) {
+      return { ok: false, error: '结束日期不能早于开始日期' };
+    }
+  }
+
+  // 类型：日程（有时间）/ 任务（没时间）/ 项目。
+  // 以前只认 task 和 event，前端存的 'project' 会被悄悄降级成 'event' ——
+  // 数据写进去就丢了，界面上「项目」那一栏永远是空的。
+  const type = body.type === 'task' ? 'task'
+    : body.type === 'project' ? 'project'
+    : 'event';
 
   return {
     ok: true,
@@ -310,6 +327,7 @@ function normalizeEvent(body) {
       date,
       time,
       endTime,
+      endDate,
       location: clampStr(body.location, EVENT_LIMITS.location).trim(),
       people: clampStr(body.people, EVENT_LIMITS.people).trim(),
       raw: clampStr(body.raw, EVENT_LIMITS.raw),
@@ -678,7 +696,7 @@ export default {
         // 软删除的记录不推给订阅端 —— 订阅是「看还活着的东西」的通道，
         // 墓碑只用于设备间同步对账。
         const { results: evts } = await env.DB.prepare(
-          'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? AND deleted_at = 0 ORDER BY date, time'
+          'SELECT id, title, date, time, end_time, end_date, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? AND deleted_at = 0 ORDER BY date, time'
         ).bind(row.user_id).all();
 
         // iCal 文本转义。
@@ -718,13 +736,17 @@ export default {
         ];
 
         for (const e of (evts || [])) {
+          // 跨日：end_date 存在且晚于 date。
+          // 前面几行 SQL 已经把 end_date 查出来了，这里直接用。
+          const spansDays = !!e.end_date && e.end_date > e.date;
           if (e.type === 'task') {
             const dateStr = e.date.replace(/-/g, '');
             const prefix = e.completed ? '✓ ' : '';
             lines.push(
               'BEGIN:VEVENT',
               `DTSTART;VALUE=DATE:${dateStr}`,
-              `DTEND;VALUE=DATE:${allDayEnd(e.date)}`,
+              // 跨日的任务是一整段多天的全日事件，DTEND 落在结束日的次日
+              `DTEND;VALUE=DATE:${allDayEnd(spansDays ? e.end_date : e.date)}`,
               `SUMMARY:${icalEscape(prefix + e.title)}`,
               `DESCRIPTION:${icalEscape(e.raw || '')}`,
               ...(e.location ? [`LOCATION:${icalEscape(e.location)}`] : []),
@@ -734,7 +756,12 @@ export default {
             );
           } else {
             const dt = toUTC(e.date, e.time);
-            const endDt = e.end_time ? toUTC(e.date, e.end_time) : addHour(dt);
+            // 结束时刻：
+            //   当天的事 → 用当天的 end_time，没有就加一小时
+            //   跨日的事 → 落在**结束日**；没说几点就取那天的 23:59
+            const endDt = spansDays
+              ? toUTC(e.end_date, e.end_time || '23:59')
+              : (e.end_time ? toUTC(e.date, e.end_time) : addHour(dt));
             lines.push(
               'BEGIN:VEVENT',
               `DTSTART:${dt}`,
@@ -792,7 +819,7 @@ export default {
           ).bind(userId, tombstoneCutoff).run();
         }
 
-        let query = 'SELECT id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at FROM events WHERE user_id = ?';
+        let query = 'SELECT id, title, date, time, end_time, end_date, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at FROM events WHERE user_id = ?';
         const params = [userId];
 
         if (since) {
@@ -835,8 +862,8 @@ export default {
 
         // deleted_at = 0：若这个 id 之前被软删除过，重新创建即复活。
         await env.DB.prepare(
-          'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, deleted_at = 0, updated_at = excluded.updated_at'
-        ).bind(eventId, userId, v.title, v.date, v.time, v.endTime, v.location, v.people, v.raw, v.type, v.completed, v.dateConfirmed, ts).run();
+          'INSERT INTO events (id, user_id, title, date, time, end_time, end_date, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, end_date = excluded.end_date, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, deleted_at = 0, updated_at = excluded.updated_at'
+        ).bind(eventId, userId, v.title, v.date, v.time, v.endTime, v.endDate, v.location, v.people, v.raw, v.type, v.completed, v.dateConfirmed, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
       }
@@ -855,7 +882,7 @@ export default {
         // 因此这里不再做基于客户端时间戳的冲突判定 ——
         // 客户端时钟不可信，一律以服务端到达顺序为准。
         for (const ev of events) {
-          const { id, title, date, time, endTime, location, people, raw, type, completed } = ev;
+          const { id, title, date, time, endTime, endDate, location, people, raw, type, completed } = ev;
           if (!id || !title || !date) continue;
 
           // 按 id 查归属（不限 user_id）：查不到才可能是自己的新记录，
@@ -875,8 +902,8 @@ export default {
 
           const ts = Date.now();
           await env.DB.prepare(
-            'INSERT INTO events (id, user_id, title, date, time, end_time, location, people, raw, type, completed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, deleted_at = 0, updated_at = excluded.updated_at'
-          ).bind(id, userId, title, date, time || '', endTime || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
+            'INSERT INTO events (id, user_id, title, date, time, end_time, end_date, location, people, raw, type, completed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, end_date = excluded.end_date, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, deleted_at = 0, updated_at = excluded.updated_at'
+          ).bind(id, userId, title, date, time || '', endTime || '', endDate || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
           merged.push(id);
         }
 
@@ -936,8 +963,8 @@ export default {
           : existing.date_confirmed;
         // 编辑一条被删掉的记录等于复活它（用户动作比删除新）
         await env.DB.prepare(
-          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, date_confirmed = ?, deleted_at = 0, updated_at = ? WHERE id = ? AND user_id = ?'
-        ).bind(v.title, v.date, v.time, v.endTime, v.location, v.people, v.raw, v.type, newCompleted, newDateConfirmed, ts, eventId, userId).run();
+          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, end_date = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, date_confirmed = ?, deleted_at = 0, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(v.title, v.date, v.time, v.endTime, v.endDate, v.location, v.people, v.raw, v.type, newCompleted, newDateConfirmed, ts, eventId, userId).run();
 
         return json({ ok: true, updated_at: ts }, 200, headers);
       }

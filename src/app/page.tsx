@@ -151,7 +151,7 @@ export default function Home() {
   const [events, setEvents] = useState<ScheduleEvent[]>([]);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ title: '', date: '', time: '', endTime: '', location: '', people: '' });
+  const [editForm, setEditForm] = useState({ title: '', date: '', time: '', endTime: '', endDate: '', location: '', people: '' });
 
   // v4.1：月历锚点（当前显示哪个月）与窄屏判定
   const [monthAnchor, setMonthAnchor] = useState(new Date());
@@ -308,6 +308,7 @@ export default function Home() {
     date: e.date,
     time: e.time,
     endTime: e.endTime,
+    endDate: e.endDate || '',
     location: e.location,
     people: e.people,
     raw: e.raw,
@@ -449,7 +450,7 @@ export default function Home() {
 
       const items: CloudItem<ScheduleEvent>[] = (cloudEvents || []).map((ce: {
         id: string; updated_at: number; deleted_at?: number; title: string; date: string;
-        time?: string; end_time?: string; location?: string; people?: string; raw?: string;
+        time?: string; end_time?: string; end_date?: string; location?: string; people?: string; raw?: string;
         type?: string; completed?: number; date_confirmed?: number;
       }) => ({
         id: ce.id,
@@ -461,10 +462,11 @@ export default function Home() {
           date: ce.date,
           time: ce.time || '',
           endTime: ce.end_time || '',
+          endDate: ce.end_date || '',
           location: ce.location || '',
           people: ce.people || '',
           raw: ce.raw || '',
-          type: (ce.type || 'event') as 'event' | 'task',
+          type: (ce.type || 'event') as 'event' | 'task' | 'project',
           completed: !!ce.completed,
           dateConfirmed: (ce.date_confirmed ?? 1) as 0 | 1,
           updatedAt: ce.updated_at,
@@ -629,6 +631,8 @@ export default function Home() {
       date: targetDate,
       time: parsed.time,
       endTime: '',
+      // 跨日：从哪一天到哪一天。日期详情卡里加的那条强制落当天，不跨日。
+      endDate: (showDayCard && detailDate) ? '' : (parsed.endDate || ''),
       location: '',
       people: '',
       raw: parsed.raw,
@@ -648,7 +652,7 @@ export default function Home() {
 
   const startEdit = (event: ScheduleEvent) => {
     setEditingEventId(event.id);
-    setEditForm({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, location: event.location, people: event.people });
+    setEditForm({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, endDate: event.endDate || '', location: event.location, people: event.people });
   };
 
   const saveEdit = async () => {
@@ -660,6 +664,7 @@ export default function Home() {
       date: editForm.date,
       time: editForm.time,
       endTime: editForm.endTime,
+      endDate: editForm.endDate,
       location: editForm.location,
       people: editForm.people,
       raw: existing?.raw || '',
@@ -756,10 +761,12 @@ export default function Home() {
 
   const generateCsvTemplate = () => {
     const sample = [
-      '日期,开始时间,结束时间,事项,地点,人员,备注',
-      '2026-07-20,08:50,10:30,初始训练-模拟航班,青浦B777经济静态舱,张教员',
-      '2026-07-21,12:50,13:50,团队周会,C楼201,全组',
-      '2026-07-22,,,整理文档,,,培训材料归档',
+      // 末列「结束日期」是跨日用的：填了就占这几天，月历上连成一条
+      '日期,开始时间,结束时间,事项,地点,人员,备注,结束日期',
+      '2026-07-20,08:50,10:30,初始训练-模拟航班,青浦B777经济静态舱,张教员,,',
+      '2026-07-21,12:50,13:50,团队周会,C楼201,全组,,',
+      '2026-07-22,,,整理文档,,,培训材料归档,,',
+      '2026-07-23,09:00,,跨日培训,C楼201,张教员,,2026-07-25',
     ].join('\n');
     const blob = new Blob(['﻿' + sample], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -801,9 +808,11 @@ export default function Home() {
         const hasHeader = headerCells.length > 0 && looksLikeHeader(headerCells.join(','));
         const idx = hasHeader ? mapColumns(headerCells) : {
           date: 0, time: 1, endTime: 2, content: 3, location: 4, people: 5, note: 6,
+          endDate: -1,
         };
 
-        const csvLines = ['日期,开始时间,结束时间,事项,地点,人员,备注'];
+        // 八列：前七列位置不动，跨日的「结束日期」放末尾
+        const csvLines = ['日期,开始时间,结束时间,事项,地点,人员,备注,结束日期'];
         let rowCount = 0;
         for (const r of dataRows) {
           if (++rowCount > MAX_IMPORT_ROWS) {
@@ -855,6 +864,7 @@ export default function Home() {
       date: d.date,
       time: d.time,
       endTime: d.endTime,
+      endDate: d.endDate,
       location: d.location,
       people: d.people,
       raw: d.raw,
@@ -905,11 +915,16 @@ export default function Home() {
   // 无论有没有激活都得看得见。以前加了 isOnline 判断，结果是
   // 「这一周」里能看到、「今天的安排」却是空的，同一份数据两个说法，
   // 用户会以为记录丢了。现在两处口径一致。
+  // 某天涉及的事件。
+  // 跨日事件在它占的**每一天**都要出现 —— 点 11/20 也能看到 11/18-11/22 那件事。
+  const coversDate = (e: ScheduleEvent, d: string) =>
+    e.date === d || (!!e.endDate && e.endDate > e.date && d > e.date && d <= e.endDate);
+
   const dayEvents = (detailDate)
-    ? events.filter(e => e.date === detailDate && e.type === 'event').sort((a, b) => a.time.localeCompare(b.time))
+    ? events.filter(e => coversDate(e, detailDate) && e.type === 'event').sort((a, b) => a.time.localeCompare(b.time))
     : [];
   const dayTasks = (detailDate)
-    ? events.filter(e => e.date === detailDate && e.type !== 'event')
+    ? events.filter(e => coversDate(e, detailDate) && e.type !== 'event')
         .sort((a, b) => (a.completed ? 1 : 0) - (b.completed ? 1 : 0) || b.updatedAt - a.updatedAt)
     : [];
 
@@ -1232,6 +1247,10 @@ export default function Home() {
                         <input type="time" value={e.endTime} placeholder="结束" onChange={ev => {
                           const next = [...importPreview]; next[i] = { ...next[i], endTime: ev.target.value }; setImportPreview(next);
                         }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-20" />
+                        {/* 跨日的结束日期 —— 填了就占这几天，月历上连成一条 */}
+                        <input type="date" value={e.endDate || ''} title="结束日期（跨日）" onChange={ev => {
+                          const next = [...importPreview]; next[i] = { ...next[i], endDate: ev.target.value }; setImportPreview(next);
+                        }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] w-[122px]" />
                         <input type="text" value={e.location} placeholder="地点" onChange={ev => {
                           const next = [...importPreview]; next[i] = { ...next[i], location: ev.target.value }; setImportPreview(next);
                         }} className="px-2 py-1 border border-[#E8E4DF] rounded text-xs bg-white outline-none focus:border-[#1C1C1C] flex-1 min-w-20" />
@@ -1340,7 +1359,7 @@ export default function Home() {
               editForm={editForm}
               onEditFormChange={setEditForm}
               onStartEdit={startEdit}
-              onCancelEdit={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', location: '', people: '' }); }}
+              onCancelEdit={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', endDate: '', location: '', people: '' }); }}
               onSaveEdit={saveEdit}
               onToggleCompleted={toggleTaskCompleted}
               onDelete={deleteEvent}
@@ -1381,7 +1400,7 @@ export default function Home() {
           month={monthAnchor.getMonth() + 1}
           events={events.map(e => ({
             id: e.id, title: e.title, date: e.date, time: e.time,
-            endTime: e.endTime, location: e.location, people: e.people,
+            endTime: e.endTime, endDate: e.endDate, location: e.location, people: e.people,
             type: e.type, completed: e.completed,
           }))}
           today={new Date()}

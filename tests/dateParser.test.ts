@@ -282,3 +282,73 @@ describe('时间戳与基准日', () => {
     assert.equal(r.date, '2024-02-29');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 跨日：一句话占好几天
+// ---------------------------------------------------------------------------
+
+describe('跨日表达', () => {
+  const base = new Date(2026, 10, 3);   // 2026-11-03
+
+  test('「21号到25号」→ 两边都缺月，认不准，不跨日', () => {
+    // 跟「21号开会」是同一条纪律：光有日号没有月/year，就是猜。
+    // 「21号」单说都不认，凭什么「21号到25号」就认？
+    const p = parseText('21号到25号出差', { baseDate: base });
+    assert.equal(p.endDate, '');
+  });
+
+  test('「11月21日到23日」→ 右半的月年跟左半借', () => {
+    const p = parseText('11月21日到23日培训', { baseDate: base });
+    assert.equal(p.date, '2026-11-21');
+    assert.equal(p.endDate, '2026-11-23');
+    assert.equal(p.title, '培训');
+  });
+
+  test('「11月21日到11月25日」→ 两边都完整', () => {
+    const p = parseText('11月21日到11月25日带训', { baseDate: base });
+    assert.equal(p.date, '2026-11-21');
+    assert.equal(p.endDate, '2026-11-25');
+  });
+
+  test('「下周一到周五」→ 右半只给星期几，继承「下」这个周偏移', () => {
+    const p = parseText('下周一到周五带训', { baseDate: base });
+    assert.equal(p.date, '2026-11-09');   // 下周一
+    assert.equal(p.endDate, '2026-11-13'); // 下周五
+  });
+
+  test('「至」也算连接词', () => {
+    const p = parseText('11月21日至23日培训', { baseDate: base });
+    assert.equal(p.endDate, '2026-11-23');
+  });
+
+  test('跨月：11月28日到12月3日', () => {
+    const p = parseText('11月28日到12月3日出差', { baseDate: base });
+    assert.equal(p.date, '2026-11-28');
+    assert.equal(p.endDate, '2026-12-03');
+  });
+
+  test('结束早于开始 → 认不准，不跨日（宁可漏不可错）', () => {
+    const p = parseText('11月25日到21号培训', { baseDate: base });
+    assert.equal(p.endDate, '');
+  });
+
+  test('句中的跨日不算数（「上周五的排班从21号改到25号」）', () => {
+    const p = parseText('上周五的排班从21号改到25号', { baseDate: base });
+    assert.equal(p.endDate, '');
+    assert.ok(p.title.includes('排班'), '描述里不该把日期词剥掉：' + p.title);
+  });
+
+  test('没有连接词就是普通单日', () => {
+    const p = parseText('21号开会', { baseDate: base });
+    // 裸日号缺月 → 落基准日（既有纪律：年份/月份不明确就不猜）
+    assert.equal(p.date, '2026-11-03');
+    assert.equal(p.endDate, '');
+  });
+
+  test('普通句子不受影响', () => {
+    const p = parseText('上周三 带学员走了 B777 应急演练', { baseDate: base });
+    assert.equal(p.date, '2026-10-28');
+    assert.equal(p.endDate, '');
+    assert.equal(p.title, '带学员走了 B777 应急演练');
+  });
+});

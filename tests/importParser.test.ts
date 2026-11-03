@@ -158,7 +158,15 @@ describe('表头识别', () => {
 describe('列映射', () => {
   test('标准表头映射正确', () => {
     const idx = mapColumns(['日期', '开始时间', '结束时间', '事项', '地点', '人员', '备注']);
-    assert.deepEqual(idx, { date: 0, time: 1, endTime: 2, content: 3, location: 4, people: 5, note: 6 });
+    assert.deepEqual(idx, { date: 0, time: 1, endTime: 2, endDate: -1, content: 3, location: 4, people: 5, note: 6 });
+  });
+
+  test('「结束日期」列能被认出来，而且不会被「日期」抢走', () => {
+    const idx = mapColumns(['日期', '结束日期', '开始时间', '结束时间', '事项']);
+    assert.equal(idx.date, 0);
+    assert.equal(idx.endDate, 1);
+    assert.equal(idx.time, 2);
+    assert.equal(idx.endTime, 3);
   });
 
   test('「结束时间」不会被「时间」抢走', () => {
@@ -364,7 +372,7 @@ describe('整行转换 —— 复刻用户那张课表', () => {
     ];
     assert.deepEqual(
       xlsxRowToTemplateCells(row, idx),
-      ['2026-11-20', '08:50', '10:30', '初始训练-模拟航班', '青浦B777经济舱', '张教员', ''],
+      ['2026-11-20', '08:50', '10:30', '初始训练-模拟航班', '青浦B777经济舱', '张教员', '', ''],
     );
   });
 

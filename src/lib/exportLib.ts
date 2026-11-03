@@ -8,13 +8,17 @@
 //   CSV   用 Excel / Numbers 打开继续加工
 //   XLSX  直接是表格，发给同事
 //
-// 固定七列：日期、开始时间、结束时间、事项、地点、人员、原话。
+// 固定八列：日期、开始时间、结束时间、事项、地点、人员、原话、结束日期。
 // 不带完成状态 —— 界面已经不暴露这个概念，导出是拿去做周报原料的，
 // 不是用来对账的。
+//
+// 「结束日期」加在**末尾**而不是紧跟日期：
+// 前七列的位置一个字没动，用户现有的表格、脚本、习惯都不受影响，
+// 老文件（七列）也照样能导进来。
 
 export type ExportRange = 'today' | 'week' | 'month' | 'custom';
 
-export const EXPORT_COLUMNS = ['日期', '开始时间', '结束时间', '事项', '地点', '人员', '原话'];
+export const EXPORT_COLUMNS = ['日期', '开始时间', '结束时间', '事项', '地点', '人员', '原话', '结束日期'];
 
 export interface ExportRow {
   date: string;
@@ -24,12 +28,14 @@ export interface ExportRow {
   location: string;
   people: string;
   raw: string;
+  /** 跨日事件的结束日期（含当天）；空 = 不跨日 */
+  endDate: string;
 }
 
 /** 把内部记录转成导出行（只取七列，不含完成状态与内部类型） */
 export function toExportRow(e: {
   date: string; time: string; endTime: string; title: string;
-  location: string; people: string; raw: string;
+  location: string; people: string; raw: string; endDate?: string;
 }): ExportRow {
   return {
     date: e.date,
@@ -39,6 +45,7 @@ export function toExportRow(e: {
     location: e.location || '',
     people: e.people || '',
     raw: e.raw || '',
+    endDate: e.endDate || '',
   };
 }
 
@@ -114,7 +121,7 @@ export function filterByRange(
 export function toMatrix(rows: ExportRow[]): string[][] {
   return [
     [...EXPORT_COLUMNS],
-    ...rows.map(r => [r.date, r.time, r.endTime, r.title, r.location, r.people, r.raw]),
+    ...rows.map(r => [r.date, r.time, r.endTime, r.title, r.location, r.people, r.raw, r.endDate]),
   ];
 }
 

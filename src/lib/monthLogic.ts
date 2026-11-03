@@ -11,6 +11,8 @@ export interface MonthEvent {
   date: string;
   time: string;
   endTime: string;
+  /** 跨日事件的结束日期（含当天，YYYY-MM-DD）；空 = 不跨日 */
+  endDate?: string;
   location: string;
   people: string;
   /** 类型：日程（有时间的）、任务（没时间的）、项目 */
@@ -18,12 +20,23 @@ export interface MonthEvent {
   completed: boolean;
 }
 
+/**
+ * 跨日事件在某一天的**位置**。
+ *
+ * 为什么要分位置：一条线画在 21 号和画在 23 号，形状不一样 ——
+ * 开始那天左端是圆头（左边没有延续），中间两端都是方头，
+ * 最后那天右端是圆头。拼起来才是一条完整的事。
+ */
+export type SpanPos = 'single' | 'start' | 'mid' | 'end';
+
 /** 月历格子里的一条 —— 一件事一行 */
 export interface MonthLine {
   id: string;
   title: string;
   type: string;
   completed: boolean;
+  /** 这条线在跨日事件里处于第几天 */
+  span: SpanPos;
 }
 
 export interface MonthCell {
@@ -47,6 +60,56 @@ export interface MonthGrid {
 }
 
 /**
+ * 类型在格子里的排列次序：日程 → 任务 → 项目。
+ *
+ * 为什么固定次序：一天里可能同时有四五件事，全靠颜色区分不够 ——
+ * 固定次序让「日程」永远在最上面（最该被看见的），
+ * 「任务」其次，「项目」垫底。整月所有格子一个规律，扫一眼就懂。
+ *
+ * 同类型内部保持原有相对顺序（sort 是稳定的），
+ * 不去按时间重排 —— 日程之间谁先谁后是用户自己定的顺序，不该由程序改。
+ */
+const TYPE_RANK: Record<string, number> = {
+  event: 0,    // 日程
+  task: 1,     // 任务
+  project: 2,  // 项目
+};
+/** 没见过的类型（旧数据、以后新增的类型）排最后，不跟前三类抢位置 */
+const TYPE_RANK_FALLBACK = 3;
+
+function typeRank(type: string): number {
+  const r = TYPE_RANK[type];
+  return r === undefined ? TYPE_RANK_FALLBACK : r;
+}
+
+/**
+ * 一个事件占哪几天。
+ *
+ * 跨日事件要占**从开始日到结束日的每一天** —— 月历上每天画一段，
+ * 段与段之间接起来，才是「一件事连着好几天」的样子。
+ *
+ * 位置（start/mid/end）是按**整个跨度**算的，不是按当前月算：
+ * 一个 10/28 到 11/3 的事，在 11 月视图里 11/1 那段是 'mid'（左端方头，
+ * 表示「从上月延续过来」），切到 10 月看 10/28 那段才是 'start'。
+ *
+ * 上限 60 天：end_date 是用户填的，写错了不能让月历无限画线。
+ */
+const MAX_SPAN_DAYS = 60;
+
+export function spanDays(start: string, end?: string): string[] {
+  if (!end || end <= start) return [start];
+  const out: string[] = [];
+  const d = new Date(start + 'T00:00:00');
+  const last = new Date(end + 'T00:00:00');
+  if (Number.isNaN(d.getTime()) || Number.isNaN(last.getTime())) return [start];
+  while (d.getTime() <= last.getTime() && out.length < MAX_SPAN_DAYS) {
+    out.push(toDateStr(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+/**
  * 生成月历网格。
  *
  * 周一为一周之首（跟周视图一致）。
@@ -58,12 +121,22 @@ export interface MonthGrid {
  * 这在固定底部的布局里很重要。
  */
 export function buildMonthGrid(year: number, month: number, events: MonthEvent[], today: Date): MonthGrid {
-  // 1. 先按日期分组
-  const byDate = new Map<string, MonthEvent[]>();
+  // 1. 先按日期分组。
+  //    跨日事件会落进它占的**每一天** —— 不然它只在开始那天出现，
+  //    后面几天就断了，连不成一条线。
+  const byDate = new Map<string, { e: MonthEvent; span: SpanPos }[]>();
   for (const e of events) {
-    const list = byDate.get(e.date) || [];
-    list.push(e);
-    byDate.set(e.date, list);
+    const days = spanDays(e.date, e.endDate);
+    const last = days.length - 1;
+    days.forEach((d, i) => {
+      const span: SpanPos = last === 0 ? 'single'
+        : i === 0 ? 'start'
+        : i === last ? 'end'
+        : 'mid';
+      const list = byDate.get(d) || [];
+      list.push({ e, span });
+      byDate.set(d, list);
+    });
   }
 
   // 2. 这个月 1 号是周几（0=周一 … 6=周日）
@@ -90,9 +163,12 @@ export function buildMonthGrid(year: number, month: number, events: MonthEvent[]
       day: d,
       isToday: ds === todayStr,
       inMonth: true,
-      lines: list.map(e => ({
-        id: e.id, title: e.title, type: e.type, completed: e.completed,
-      })),
+      lines: (list || [])
+        .map(({ e, span }) => ({
+          id: e.id, title: e.title, type: e.type, completed: e.completed, span,
+        }))
+        // 日程 → 任务 → 项目，固定次序
+        .sort((a, b) => typeRank(a.type) - typeRank(b.type)),
     });
   }
 

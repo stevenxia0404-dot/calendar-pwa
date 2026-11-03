@@ -15,6 +15,7 @@ const payload = (title: string): SyncPayload => ({
   date: '2026-11-01',
   time: '09:00',
   endTime: '',
+  endDate: '',
   location: '',
   people: '',
   raw: '',

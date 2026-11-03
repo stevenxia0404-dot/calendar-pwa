@@ -23,6 +23,8 @@ export interface SyncPayload {
   date: string;
   time: string;
   endTime: string;
+  /** 跨日事件的结束日期（含当天）；空串 = 不跨日 */
+  endDate: string;
   location: string;
   people: string;
   raw: string;

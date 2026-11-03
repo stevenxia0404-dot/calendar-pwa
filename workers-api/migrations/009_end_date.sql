@@ -1,0 +1,17 @@
+-- 跨日事件：结束日期（含当天）。
+--
+-- 为什么需要：以前一个事件只有 date + time + end_time，
+-- end_time 是「当天的时刻」（22:00），表达不了「21 号到 23 号」这种跨天安排。
+-- 月历上要画连续的一条线，底层必须知道这件事占哪几天。
+--
+-- 语义：
+--   ''        = 不跨日（只有 date 那天）
+--   '2026-11-23' = 从 date 到 11-23 每天都算（含首尾）
+--
+-- 用 TEXT 而不是 INTEGER，跟 date 保持同一种格式（YYYY-MM-DD），
+-- 免得两处格式转换各写一套、还对不上。
+--
+-- 幂等说明：D1 的 SQLite 不支持 ALTER TABLE ... ADD COLUMN IF NOT EXISTS，
+-- 由迁移执行器（workers-api/scripts/migrate.mjs）探测列是否存在，存在则跳过。
+-- 不要直接 wrangler d1 execute --file 跑这个文件。
+ALTER TABLE events ADD COLUMN end_date TEXT DEFAULT '';

@@ -26,6 +26,7 @@ const row = (over: Partial<ExportRow> = {}): ExportRow => ({
   location: '青浦B777经济静态舱',
   people: '张教员',
   raw: '今天下午要把 B777 的乘务应急检查表改完',
+  endDate: '',
   ...over,
 });
 
@@ -100,16 +101,16 @@ describe('排序', () => {
   });
 });
 
-describe('导出内容 —— 固定七列，不带完成状态', () => {
-  test('表头就是七项', () => {
-    assert.deepEqual(EXPORT_COLUMNS, ['日期', '开始时间', '结束时间', '事项', '地点', '人员', '原话']);
+describe('导出内容 —— 固定八列，不带完成状态', () => {
+  test('表头就是这八项（跨日的结束日期在末尾）', () => {
+    assert.deepEqual(EXPORT_COLUMNS, ['日期', '开始时间', '结束时间', '事项', '地点', '人员', '原话', '结束日期']);
   });
 
-  test('每行七列，且不含完成状态列', () => {
+  test('每行八列，且不含完成状态列', () => {
     const m = toMatrix([row()]);
     assert.equal(m.length, 2);
-    assert.equal(m[0].length, 7);
-    assert.equal(m[1].length, 7);
+    assert.equal(m[0].length, 8);
+    assert.equal(m[1].length, 8);
     assert.ok(!m[0].includes('完成'));
     assert.ok(!m[0].includes('状态'));
   });
@@ -119,13 +120,18 @@ describe('导出内容 —— 固定七列，不带完成状态', () => {
     assert.equal(m[1][6], '今天下午要把 B777 的乘务应急检查表改完');
   });
 
+  test('第八列是结束日期，跨日的事写得出、跨不了日的写空', () => {
+    assert.equal(toMatrix([row()])[1][7], '');
+    assert.equal(toMatrix([row({ endDate: '2026-11-05' })])[1][7], '2026-11-05');
+  });
+
   test('toExportRow 丢掉内部字段', () => {
     const r = toExportRow({
       date: '2026-10-31', time: '09:00', endTime: '', title: 't',
-      location: '', people: '', raw: 'r',
+      location: '', people: '', raw: 'r', endDate: '',
       completed: true, type: 'task', updatedAt: 123, id: 'x', synced: true,
     } as never);
-    assert.deepEqual(Object.keys(r).sort(), ['date', 'endTime', 'location', 'people', 'raw', 'time', 'title']);
+    assert.deepEqual(Object.keys(r).sort(), ['date', 'endDate', 'endTime', 'location', 'people', 'raw', 'time', 'title']);
   });
 });
 
