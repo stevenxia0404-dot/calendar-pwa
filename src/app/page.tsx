@@ -21,6 +21,7 @@ import DayCard from '@/components/DayCard';
 import StatCard from '@/components/StatCard';
 import SettingsCard from '@/components/SettingsCard';
 import InputArea from '@/components/InputArea';
+import { useDialog, DialogHost } from '@/components/Dialog';
 import Inspector from '@/components/Inspector';
 import { ParsedResult } from '@/lib/dateParser';
 import type { ScheduleEvent } from '@/lib/scheduleTypes';
@@ -167,6 +168,11 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   /** 四宫格点的是哪一类 */
   const [statKind, setStatKind] = useState<'event' | 'task' | 'project' | 'completed'>('event');
+
+  // 应用内弹窗 —— 替代原生 confirm()/alert()
+  // （iOS PWA 里原生 confirm 会被静默忽略，返回 undefined，
+  //   于是「删除」点了跟没点一样，什么提示都没有）
+  const { dialog, ask, tell, close } = useDialog();
   /** 在四宫格卡里点了「＋」—— 下面输入框加的内容归到那一类 */
   const [statAdding, setStatAdding] = useState(false);
 
@@ -702,8 +708,17 @@ export default function Home() {
    * 理由：删的是容器，不是那些事本身；把它们标成完成，
    * 既不丢数据，又不会让它们继续占着月历上未完成的位置。
    */
-  const deleteProject = (id: string) => {
+  const deleteProject = async (id: string) => {
+    const proj = events.find(e => e.id === id);
     const affected = events.filter(e => e.projectId === id);
+    const ok = await ask(
+      `删掉项目「${proj?.title || ''}」？`,
+      affected.length
+        ? `它下面的 ${affected.length} 件事不会被删，会归到「完成」里。`
+        : '这个项目下面还没有事。',
+      { danger: true, confirmText: '删掉项目' },
+    );
+    if (!ok) return;
     const ts = Date.now();
     setEvents(prev => prev
       .filter(e => e.id !== id)
@@ -766,8 +781,14 @@ export default function Home() {
 
   // 删除。同步是「入队 + 后台重放」，所以这里不需要 await ——
   // 界面立刻把这条移走，推送成功与否交给队列处理。
-  const deleteEvent = (id: string) => {
-    if (!confirm('确定要删除这个日程吗？')) return;
+  const deleteEvent = async (id: string) => {
+    if (!await ask('确定要删除这个日程吗？', '', { danger: true, confirmText: '删掉' })) return;
+    // 删的是项目容器 → 它下面的事归为「完成」，别留成孤儿
+    const isProject = events.find(e => e.id === id)?.type === 'project';
+    if (isProject) {
+      await deleteProject(id);
+      return;
+    }
     setEvents(prev => prev.filter(e => e.id !== id));
     if (isOnline && token) {
       // 墓碑语义：服务端会留一条删除标记，同步给其它设备，
@@ -855,7 +876,7 @@ export default function Home() {
       const ext = file.name.split('.').pop()?.toLowerCase();
 
       if (file.size > MAX_IMPORT_FILE_BYTES) {
-        alert(`文件太大（${(file.size / 1024 / 1024).toFixed(1)}MB），请拆分后再导入`);
+        await tell('文件太大', `${(file.size / 1024 / 1024).toFixed(1)}MB —— 请拆分后再导入`);
         return;
       }
 
@@ -891,7 +912,7 @@ export default function Home() {
         let rowCount = 0;
         for (const r of dataRows) {
           if (++rowCount > MAX_IMPORT_ROWS) {
-            alert(`数据太多（超过 ${MAX_IMPORT_ROWS} 行），请拆成几个文件分别导入`);
+            await tell('数据太多', `超过 ${MAX_IMPORT_ROWS} 行 —— 请拆成几个文件分别导入`);
             return;
           }
           // 日期列和时间列由 cellToParts 处理 —— Excel 的「纯时间」单元格
@@ -907,7 +928,7 @@ export default function Home() {
         // 老版 .xls 是二进制格式，按文本读只会得到乱码，
         // 用户看到的是「未识别到有效数据」，根本不知道该怎么办。
         // 明确告诉他怎么转，比给个哑巴失败好。
-        alert('暂不支持老版 .xls 格式。\n请用 Excel 打开后「另存为」.xlsx 再导入。');
+        await tell('暂不支持老版 .xls', '请用 Excel 打开后「另存为」.xlsx 再导入。');
         return;
       } else {
         // 纯文本类（txt / ics / json 等）按文本读，交给下面的规则解析。
@@ -915,14 +936,14 @@ export default function Home() {
         // 所有导入都走 importParser 的确定性规则。
         setImportText(await file.text());
       }
-    } catch { alert('文件读取失败'); }
+    } catch { await tell('文件读取失败', '换个文件试试，或者先把文件转成 xlsx / csv。'); }
   };
 
-  const parseImportText = () => {
+  const parseImportText = async () => {
     // 行数先挡一道：文本解析同样吃内存，几万行的 CSV 一样能卡死页面
     const lineCount = importText.split('\n').length;
     if (lineCount > MAX_IMPORT_ROWS + 10) {
-      alert(`数据太多（约 ${lineCount} 行，上限 ${MAX_IMPORT_ROWS} 行），请拆成几个文件分别导入`);
+      await tell('数据太多', `约 ${lineCount} 行，上限 ${MAX_IMPORT_ROWS} 行 —— 请拆成几个文件分别导入`);
       return;
     }
 
@@ -931,7 +952,7 @@ export default function Home() {
     const firstLine = importText.replace(/^﻿/, '').split('\n').filter(l => l.trim())[0] || '';
     const drafts = parseImportRows(importText, looksLikeHeader(firstLine));
 
-    if (drafts.length === 0) { alert('未识别到有效数据'); return; }
+    if (drafts.length === 0) { await tell('未识别到有效数据', '检查一下第一行是不是「日期,事项」这样的表头，或者内容是不是少了日期列。'); return; }
 
     setImportPreview(drafts.map(d => ({
       id: newId(),
@@ -949,12 +970,12 @@ export default function Home() {
     })));
   };
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!importPreview) return;
     // 没日期的行不能导入 —— 落今天是猜，猜出来的日期会悄悄错掉
     const missingDate = importPreview.filter(e => !e.date);
     if (missingDate.length) {
-      alert(`还有 ${missingDate.length} 行没填日期，请先补上再导入`);
+      await tell('有行没填日期', `还有 ${missingDate.length} 行没填日期 —— 请先补上再导入。`);
       return;
     }
     // 去重与推送都要在 setEvents 的 updater 外面做 ——
@@ -998,8 +1019,11 @@ export default function Home() {
   const dayEvents = (detailDate)
     ? events.filter(e => coversDate(e, detailDate) && e.type === 'event').sort((a, b) => a.time.localeCompare(b.time))
     : [];
+  // 项目实体不在这里出现 —— 它是「文件夹」，不是某天发生的事。
+  // （以前用 type !== 'event'，项目被当成任务显示了，
+  //   结果新建的项目看起来像「11 月 3 日多了一条日程」）
   const dayTasks = (detailDate)
-    ? events.filter(e => coversDate(e, detailDate) && e.type !== 'event')
+    ? events.filter(e => coversDate(e, detailDate) && e.type === 'task')
         .sort((a, b) => (a.completed ? 1 : 0) - (b.completed ? 1 : 0) || b.updatedAt - a.updatedAt)
     : [];
 
@@ -1596,6 +1620,9 @@ export default function Home() {
       {/* 开发期标注器 —— 只在 next dev 出现，生产构建整块不渲染。
           改 UI 时不用靠文字描述「指哪」，点一下元素就有精确信息。 */}
       {process.env.NODE_ENV === 'development' && <Inspector />}
+
+      {/* 应用内弹窗 —— 确认/提示。原生 confirm 在 iOS PWA 里会被静默忽略。 */}
+      <DialogHost dialog={dialog} close={close} />
     </main>
   );
 }

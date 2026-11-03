@@ -290,7 +290,7 @@ function ProjectDetail({
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs text-[#A0A0A0]">这个项目下的事</span>
         {onDelete && (
-          <button onClick={() => { if (confirm(`删掉项目「${project.title}」？\n\n它下面的 ${events.length} 件事不会被删，会归到「完成」里。`)) onDelete(project.id); }}
+          <button onClick={() => onDelete(project.id)}
             className="text-xs text-[#A65C48] hover:bg-[#FEE2E2] px-2 py-1 rounded-lg transition-colors">
             删掉这个项目
           </button>
