@@ -12,6 +12,9 @@ export interface ScheduleEvent {
   endTime: string;
   /** 跨日事件的结束日期（含当天，YYYY-MM-DD）；空 = 不跨日 */
   endDate?: string;
+  /** 归属的项目 id；空 = 不属于任何项目。
+   *  项目实体本身也是一条记录（type='project'），它的 id 就是被引用的值。 */
+  projectId?: string;
   location: string;
   people: string;
   raw: string;

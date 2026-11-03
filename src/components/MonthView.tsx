@@ -207,7 +207,7 @@ function MonthCellView({ cell, onClick }: { cell: MonthCell; onClick?: (date: st
           <span
             key={l.id}
             className={`block h-[5px] ${lineClass(l.span)}`}
-            style={{ background: lineColor(l.type, l.completed) }}
+            style={{ background: lineColor(l.type, l.completed, l.projectId) }}
             title={l.title}
           />
         ))}

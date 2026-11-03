@@ -25,6 +25,8 @@ export interface SyncPayload {
   endTime: string;
   /** 跨日事件的结束日期（含当天）；空串 = 不跨日 */
   endDate: string;
+  /** 归属的项目 id；空串 = 不属于任何项目 */
+  projectId: string;
   location: string;
   people: string;
   raw: string;

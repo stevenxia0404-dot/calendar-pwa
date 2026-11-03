@@ -151,7 +151,7 @@ export default function Home() {
   const [events, setEvents] = useState<ScheduleEvent[]>([]);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ title: '', date: '', time: '', endTime: '', endDate: '', location: '', people: '' });
+  const [editForm, setEditForm] = useState({ title: '', date: '', time: '', endTime: '', endDate: '', projectId: '', location: '', people: '' });
 
   // v4.1：月历锚点（当前显示哪个月）与窄屏判定
   const [monthAnchor, setMonthAnchor] = useState(new Date());
@@ -309,6 +309,7 @@ export default function Home() {
     time: e.time,
     endTime: e.endTime,
     endDate: e.endDate || '',
+    projectId: e.projectId || '',
     location: e.location,
     people: e.people,
     raw: e.raw,
@@ -450,7 +451,7 @@ export default function Home() {
 
       const items: CloudItem<ScheduleEvent>[] = (cloudEvents || []).map((ce: {
         id: string; updated_at: number; deleted_at?: number; title: string; date: string;
-        time?: string; end_time?: string; end_date?: string; location?: string; people?: string; raw?: string;
+        time?: string; end_time?: string; end_date?: string; project_id?: string; location?: string; people?: string; raw?: string;
         type?: string; completed?: number; date_confirmed?: number;
       }) => ({
         id: ce.id,
@@ -463,6 +464,7 @@ export default function Home() {
           time: ce.time || '',
           endTime: ce.end_time || '',
           endDate: ce.end_date || '',
+          projectId: ce.project_id || '',
           location: ce.location || '',
           people: ce.people || '',
           raw: ce.raw || '',
@@ -616,8 +618,8 @@ export default function Home() {
     let targetType: ScheduleEvent['type'] = parsed.time ? 'event' : 'task';
 
     if (statAdding) {
-      // 任务/项目卡里加一条 —— 类型由卡片决定，日期没解析出来就落今天
-      targetType = statKind === 'project' ? 'project' : 'task';
+      // 任务卡里加一条 —— 类型由卡片决定，日期没解析出来就落今天
+      targetType = 'task';
       if (!targetDate) targetDate = formatLocalDate(new Date());
       setStatAdding(false);
     } else if (showDayCard && detailDate) {
@@ -648,11 +650,82 @@ export default function Home() {
     setDetailDate(ev.date);
   };
 
+  // ==================== 项目操作 ====================
+  //
+  // 项目实体就是一条 type='project' 的记录：
+  //   title = 项目名 · raw = 项目简介 · date = 创建日（月历不显示它）
+  // 事件通过 projectId 指向它 —— 一个日程可以既在月历上、又属于某个项目。
+
+  const createProject = (name: string) => {
+    const p: ScheduleEvent = {
+      id: newId(),
+      title: name.trim(),
+      date: formatLocalDate(new Date()),
+      time: '',
+      endTime: '',
+      endDate: '',
+      projectId: '',
+      location: '',
+      people: '',
+      raw: '',
+      updatedAt: Date.now(),
+      type: 'project',
+      completed: false,
+      dateConfirmed: 1,
+    };
+    setEvents(prev => [...prev, p]);
+    if (isOnline && token) {
+      enqueueChange({ id: p.id, op: 'create', payload: toPayload(p), ts: p.updatedAt });
+    }
+  };
+
+  /** 改项目名或简介 —— 改的是同一条记录的两个字段 */
+  const patchProject = (id: string, patch: { title?: string; raw?: string }) => {
+    const existing = events.find(e => e.id === id);
+    if (!existing) return;
+    const updated: ScheduleEvent = { ...existing, ...patch, updatedAt: Date.now() };
+    setEvents(prev => prev.map(e => e.id === id ? updated : e));
+    if (isOnline && token) {
+      enqueueChange({
+        id: updated.id,
+        op: existing.synced ? 'update' : 'create',
+        payload: toPayload(updated),
+        ts: updated.updatedAt,
+      });
+    }
+  };
+
+  /**
+   * 删项目。
+   *
+   * 它下面的事**不删** —— 全部归为「完成」。
+   * 理由：删的是容器，不是那些事本身；把它们标成完成，
+   * 既不丢数据，又不会让它们继续占着月历上未完成的位置。
+   */
+  const deleteProject = (id: string) => {
+    const affected = events.filter(e => e.projectId === id);
+    const ts = Date.now();
+    setEvents(prev => prev
+      .filter(e => e.id !== id)
+      .map(e => (e.projectId === id ? { ...e, completed: true, updatedAt: ts } : e)));
+    if (isOnline && token) {
+      enqueueChange({ id, op: 'delete', ts });
+      for (const e of affected) {
+        enqueueChange({
+          id: e.id,
+          op: e.synced ? 'update' : 'create',
+          payload: toPayload({ ...e, completed: true, updatedAt: ts }),
+          ts,
+        });
+      }
+    }
+  };
+
   // ==================== 日程操作 ====================
 
   const startEdit = (event: ScheduleEvent) => {
     setEditingEventId(event.id);
-    setEditForm({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, endDate: event.endDate || '', location: event.location, people: event.people });
+    setEditForm({ title: event.title, date: event.date, time: event.time, endTime: event.endTime, endDate: event.endDate || '', projectId: event.projectId || '', location: event.location, people: event.people });
   };
 
   const saveEdit = async () => {
@@ -665,6 +738,7 @@ export default function Home() {
       time: editForm.time,
       endTime: editForm.endTime,
       endDate: editForm.endDate,
+      projectId: editForm.projectId,
       location: editForm.location,
       people: editForm.people,
       raw: existing?.raw || '',
@@ -725,7 +799,8 @@ export default function Home() {
   // 所以三档格式内容完全一致，只是拿去用的地方不同。
 
   const exportRows = () => filterByRange(
-    events.map(toExportRow),
+    // 项目不是「这段时间里的事」，是容器 —— 不进导出
+    events.filter(e => e.type !== 'project').map(toExportRow),
     exportRange,
     new Date(),
     { from: exportFrom, to: exportTo },
@@ -933,12 +1008,27 @@ export default function Home() {
   // 「完成」是过往累计已完成的 —— 所以它可以远大于前三个。
   const monthPrefix = `${monthAnchor.getFullYear()}-${String(monthAnchor.getMonth() + 1).padStart(2, '0')}-`;
   const statItems: ScheduleEvent[] = (() => {
-    if (statKind === 'completed') return events.filter(e => e.completed);
+    if (statKind === 'completed') return events.filter(e => e.completed && e.type !== 'project');
     const inMonth = events.filter(e => e.date.startsWith(monthPrefix));
-    if (statKind === 'event') return inMonth.filter(e => e.type === 'event');
-    if (statKind === 'task') return inMonth.filter(e => e.type === 'task');
-    return inMonth.filter(e => e.type === 'project');
+    // 挂在项目下的事不在日程/任务格里 —— 它们在项目卡里看
+    if (statKind === 'event') return inMonth.filter(e => e.type === 'event' && !e.projectId);
+    if (statKind === 'task') return inMonth.filter(e => e.type === 'task' && !e.projectId);
+    // 项目没有日期（它是容器），所以是全部项目，不按月算
+    return events.filter(e => e.type === 'project');
   })();
+
+  // 项目 id → 它下面的事件。项目卡第二级要用。
+  const projectItems: Record<string, ScheduleEvent[]> = (() => {
+    const map: Record<string, ScheduleEvent[]> = {};
+    for (const e of events) {
+      if (!e.projectId) continue;
+      (map[e.projectId] = map[e.projectId] || []).push(e);
+    }
+    return map;
+  })();
+
+  // 全部项目（编辑表单里的项目下拉要用）
+  const allProjects = events.filter(e => e.type === 'project');
 
 
   // ==================== UI ====================
@@ -1357,9 +1447,10 @@ export default function Home() {
               dayTasks={dayTasks}
               editingEventId={editingEventId}
               editForm={editForm}
+              projects={allProjects}
               onEditFormChange={setEditForm}
               onStartEdit={startEdit}
-              onCancelEdit={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', endDate: '', location: '', people: '' }); }}
+              onCancelEdit={() => { setEditingEventId(null); setEditForm({ title: '', date: '', time: '', endTime: '', endDate: '', projectId: '', location: '', people: '' }); }}
               onSaveEdit={saveEdit}
               onToggleCompleted={toggleTaskCompleted}
               onDelete={deleteEvent}
@@ -1378,7 +1469,12 @@ export default function Home() {
               title={{ event: '日程', task: '任务', project: '项目', completed: '已完成' }[statKind]}
               items={statItems}
               canAdd={statKind === 'task' || statKind === 'project'}
-              onAdd={() => setStatAdding(true)}
+              onAdd={() => { if (statKind === 'task') setStatAdding(true); }}
+              projectItems={projectItems}
+              onCreateProject={createProject}
+              onRenameProject={(id, name) => patchProject(id, { title: name })}
+              onSaveProjectNote={(id, note) => patchProject(id, { raw: note })}
+              onDeleteProject={deleteProject}
               onToggleCompleted={toggleTaskCompleted}
               onDelete={deleteEvent}
               onClose={() => setShowStatCard(false)}
@@ -1400,7 +1496,8 @@ export default function Home() {
           month={monthAnchor.getMonth() + 1}
           events={events.map(e => ({
             id: e.id, title: e.title, date: e.date, time: e.time,
-            endTime: e.endTime, endDate: e.endDate, location: e.location, people: e.people,
+            endTime: e.endTime, endDate: e.endDate, projectId: e.projectId,
+            location: e.location, people: e.people,
             type: e.type, completed: e.completed,
           }))}
           today={new Date()}

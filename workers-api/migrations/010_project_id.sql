@@ -1,0 +1,14 @@
+-- 事件归属的项目。
+--
+-- 为什么单独一列，而不是把「项目」塞进 type：
+--   现在的 type 是三值枚举（event/task/project），一个东西要么是日程、
+--   要么是任务、要么是项目，三者互斥。
+--   但实际上一个日程**可以属于某个项目** —— 它既是日程，又是项目的一部分。
+--   这两件事不冲突，所以不能靠一个 type 字段表达，得再加一列。
+--
+-- 语义：
+--   ''       = 不属于任何项目（普通日程/任务）
+--   '项目id' = 属于这个项目（项目实体本身也是 events 表里 type='project' 的行）
+--
+-- 幂等说明：同上，由迁移执行器（workers-api/scripts/migrate.mjs）探测列是否存在。
+ALTER TABLE events ADD COLUMN project_id TEXT DEFAULT '';

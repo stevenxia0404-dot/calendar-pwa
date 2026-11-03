@@ -19,8 +19,12 @@ export interface DayCardProps {
     title: string; date: string; time: string; endTime: string;
     /** 跨日结束日期（含当天）；空 = 不跨日 */
     endDate: string;
+    /** 归属的项目 id；空 = 不属于任何项目 */
+    projectId: string;
     location: string; people: string;
   };
+  /** 全部项目 —— 编辑表单里点标签归属用 */
+  projects: ScheduleEvent[];
   onEditFormChange: (form: DayCardProps['editForm']) => void;
   onStartEdit: (e: ScheduleEvent) => void;
   onCancelEdit: () => void;
@@ -31,7 +35,7 @@ export interface DayCardProps {
 }
 
 export default function DayCard({
-  date, dayEvents, dayTasks, editingEventId, editForm,
+  date, dayEvents, dayTasks, editingEventId, editForm, projects,
   onEditFormChange, onStartEdit, onCancelEdit, onSaveEdit,
   onToggleCompleted, onDelete, onClose,
 }: DayCardProps) {
@@ -61,7 +65,7 @@ export default function DayCard({
             {dayEvents.map(e => (
               <div key={e.id} className="p-3 bg-[#F7F5F2] rounded-xl border border-[#E8E4DF]">
                 {editingEventId === e.id ? (
-                  <EditForm form={editForm} set={set} onCancel={onCancelEdit} onSave={onSaveEdit} showTime />
+                  <EditForm form={editForm} set={set} onCancel={onCancelEdit} onSave={onSaveEdit} showTime projects={projects} />
                 ) : (
                   <div className="flex items-center gap-3">
                     <span className="bg-[#ED6A3B] text-white text-sm px-3 py-1.5 rounded-lg font-mono font-semibold min-w-[60px] text-center">
@@ -93,7 +97,7 @@ export default function DayCard({
             {dayTasks.map(e => (
               <div key={e.id} className={`p-3 rounded-xl border border-[#E8E4DF] transition-colors ${e.completed ? 'bg-[#F7F5F2]/50' : 'bg-[#F7F5F2]'}`}>
                 {editingEventId === e.id ? (
-                  <EditForm form={editForm} set={set} onCancel={onCancelEdit} onSave={onSaveEdit} />
+                  <EditForm form={editForm} set={set} onCancel={onCancelEdit} onSave={onSaveEdit} projects={projects} />
                 ) : (
                   <div className="flex items-center gap-3">
                     <button onClick={() => onToggleCompleted(e.id)}
@@ -162,13 +166,14 @@ function RowActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => 
 
 /** 编辑表单 —— 日程和任务共用，只是日程多了时间两个字段 */
 function EditForm({
-  form, set, onCancel, onSave, showTime,
+  form, set, onCancel, onSave, showTime, projects,
 }: {
   form: DayCardProps['editForm'];
   set: (patch: Partial<DayCardProps['editForm']>) => void;
   onCancel: () => void;
   onSave: () => void;
   showTime?: boolean;
+  projects: ScheduleEvent[];
 }) {
   const inputCls = 'w-full px-3 py-2 border border-[#E8E4DF] rounded-lg text-sm outline-none focus:border-[#1C1C1C]';
   return (
@@ -209,6 +214,33 @@ function EditForm({
           </div>
         </div>
       )}
+      {/* 项目标签 —— 点一下就归属到这个项目，再点一下取消。
+          项目本身没有日期，它是「这些事属于它」的容器。 */}
+      <div>
+        <label className="text-xs text-[#A0A0A0] mb-1 block">属于哪个项目</label>
+        {projects.length === 0 ? (
+          <p className="text-xs text-[#C0BDB8]">还没有项目 —— 去四宫格「项目」格点加号建一个</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {projects.map(p => {
+              const on = form.projectId === p.id;
+              return (
+                <button key={p.id} type="button"
+                  onClick={() => set({ projectId: on ? '' : p.id })}
+                  className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                    on
+                      ? 'bg-[#7F77DD] border-[#7F77DD] text-white'
+                      : 'bg-white border-[#E8E4DF] text-[#5C5C5C] hover:border-[#7F77DD] hover:text-[#7F77DD]'
+                  }`}
+                  aria-pressed={on}>
+                  {p.title}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div className="flex gap-3">
         <div className="flex-1">
           <label className="text-xs text-[#A0A0A0] mb-1 block">地点</label>

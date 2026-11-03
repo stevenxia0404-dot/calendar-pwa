@@ -13,6 +13,8 @@ export interface MonthEvent {
   endTime: string;
   /** 跨日事件的结束日期（含当天，YYYY-MM-DD）；空 = 不跨日 */
   endDate?: string;
+  /** 归属的项目 id；空 = 不属于任何项目 */
+  projectId?: string;
   location: string;
   people: string;
   /** 类型：日程（有时间的）、任务（没时间的）、项目 */
@@ -37,6 +39,10 @@ export interface MonthLine {
   completed: boolean;
   /** 这条线在跨日事件里处于第几天 */
   span: SpanPos;
+  /** 这件事的开始日期（跨日排序用） */
+  startDate: string;
+  /** 归属的项目 id；空 = 不属于任何项目 */
+  projectId?: string;
 }
 
 export interface MonthCell {
@@ -83,6 +89,51 @@ function typeRank(type: string): number {
 }
 
 /**
+ * 格子里划线的排序规则。
+ *
+ * 五个档位，从上到下：
+ *   0  跨日 · 不属于项目
+ *   1  跨日 · 属于项目   ← 跨日里项目相关排后面
+ *   2  单日 · 日程（橙）
+ *   3  单日 · 任务（绿）
+ *   4  单日 · 属于项目（紫）← 项目在日程任务之后
+ *
+ * 为什么跨日最前：它横跨好几天，连起来的那条线是格子里最该被看见的东西；
+ * 压到日程下面去就白连了。
+ *
+ * 为什么跨日项目排在跨日非项目后面：项目的线连着好几格，
+ * 让它压在别人上面会挡住别的线。
+ *
+ * 同档内：跨日的按开始日期排；同类型的单日返回 0 ——
+ * 靠 sort 的稳定性保持用户自己的输入顺序，不替用户重排。
+ */
+function compareLines(a: MonthLine, b: MonthLine): number {
+  const tierA = lineTier(a);
+  const tierB = lineTier(b);
+  if (tierA !== tierB) return tierA - tierB;
+
+  // 同一档里再按类型排（跨日档里可能混着日程和任务）
+  const tA = typeRank(a.type);
+  const tB = typeRank(b.type);
+  if (tA !== tB) return tA - tB;
+
+  // 两个都是跨日 → 按开始日期
+  if (a.span !== 'single') return a.startDate.localeCompare(b.startDate);
+
+  // 同类型的单日 → 0，保持原有相对顺序
+  return 0;
+}
+
+/** 划线的档位 —— 数字越小越靠上 */
+function lineTier(line: MonthLine): number {
+  const isSpan = line.span !== 'single';
+  const isProject = !!line.projectId;
+  if (isSpan) return isProject ? 1 : 0;
+  if (isProject) return 4;
+  return typeRank(line.type) === 0 ? 2 : 3;
+}
+
+/**
  * 一个事件占哪几天。
  *
  * 跨日事件要占**从开始日到结束日的每一天** —— 月历上每天画一段，
@@ -126,6 +177,8 @@ export function buildMonthGrid(year: number, month: number, events: MonthEvent[]
   //    后面几天就断了，连不成一条线。
   const byDate = new Map<string, { e: MonthEvent; span: SpanPos }[]>();
   for (const e of events) {
+    // 项目实体不进月历 —— 它是容器（「这些事属于它」），不是某天发生的事。
+    if (e.type === 'project') continue;
     const days = spanDays(e.date, e.endDate);
     const last = days.length - 1;
     days.forEach((d, i) => {
@@ -166,9 +219,10 @@ export function buildMonthGrid(year: number, month: number, events: MonthEvent[]
       lines: (list || [])
         .map(({ e, span }) => ({
           id: e.id, title: e.title, type: e.type, completed: e.completed, span,
+          startDate: e.date, projectId: e.projectId,
         }))
-        // 日程 → 任务 → 项目，固定次序
-        .sort((a, b) => typeRank(a.type) - typeRank(b.type)),
+        // 跨日排最前，然后 日程 → 任务 → 项目
+        .sort(compareLines),
     });
   }
 
@@ -202,8 +256,9 @@ export function monthLabel(month: number): string {
  * 色相要与产品主色（橙 #ED6A3B）区分开，
  * 又要低饱和 —— 满屏小横线太鲜艳会很吵。
  */
-export function lineColor(type: string, completed: boolean): string {
+export function lineColor(type: string, completed: boolean, projectId?: string): string {
   if (completed) return '#B4B2A9';           // 已完成 → 灰
+  if (projectId) return '#7F77DD';          // 属于项目 → 紫
   switch (type) {
     case 'event': return '#ED6A3B';           // 日程 → 橙（主色）
     case 'task': return '#4E7D6C';            // 任务 → 雾青绿
@@ -215,8 +270,15 @@ export function lineColor(type: string, completed: boolean): string {
 /**
  * 四宫格的统计。
  *
- * 「日程 / 任务 / 项目」数的是**当前这个月**的（跟月历看到的一致）；
+ * 「日程 / 任务」数的是**当前这个月**的（跟月历看到的一致）；
  * 「完成」数的是**过往累计**已完成的 —— 所以它可以远大于前三个。
+ *
+ * 「项目」数的是**项目个数**（累计，不是本月）。
+ * 为什么不是本月：项目本身没有日期（它是「这些事属于它」的容器，
+ * 不是某天发生的事），没有月份可归 —— 跟「完成」一个口径。
+ *
+ * 「日程 / 任务」里**不含**挂在项目下的事 ——
+ * 那些事在项目格里体现（在项目卡里能看到它下面有几条）。
  */
 export function monthStats(
   events: MonthEvent[],
@@ -228,9 +290,9 @@ export function monthStats(
   const done = events.filter(e => e.completed);
 
   return {
-    event: inMonth.filter(e => e.type !== 'task' && e.type !== 'project').length,
-    task: inMonth.filter(e => e.type === 'task').length,
-    project: inMonth.filter(e => e.type === 'project').length,
-    completed: done.length,
+    event: inMonth.filter(e => e.type === 'event' && !e.projectId).length,
+    task: inMonth.filter(e => e.type === 'task' && !e.projectId).length,
+    project: events.filter(e => e.type === 'project').length,
+    completed: done.filter(e => e.type !== 'project').length,
   };
 }

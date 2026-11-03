@@ -313,6 +313,11 @@ function normalizeEvent(body) {
     }
   }
 
+  // 归属的项目（可空）。
+  // 项目实体本身也是 events 表里 type='project' 的行，所以这里只校验格式，
+  // 不校验指向的项目存不存在 —— 同步乱序到达时项目可能还没到。
+  const projectId = typeof body.projectId === 'string' ? body.projectId.trim() : '';
+
   // 类型：日程（有时间）/ 任务（没时间）/ 项目。
   // 以前只认 task 和 event，前端存的 'project' 会被悄悄降级成 'event' ——
   // 数据写进去就丢了，界面上「项目」那一栏永远是空的。
@@ -328,6 +333,7 @@ function normalizeEvent(body) {
       time,
       endTime,
       endDate,
+      projectId,
       location: clampStr(body.location, EVENT_LIMITS.location).trim(),
       people: clampStr(body.people, EVENT_LIMITS.people).trim(),
       raw: clampStr(body.raw, EVENT_LIMITS.raw),
@@ -696,7 +702,7 @@ export default {
         // 软删除的记录不推给订阅端 —— 订阅是「看还活着的东西」的通道，
         // 墓碑只用于设备间同步对账。
         const { results: evts } = await env.DB.prepare(
-          'SELECT id, title, date, time, end_time, end_date, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? AND deleted_at = 0 ORDER BY date, time'
+          'SELECT id, title, date, time, end_time, end_date, project_id, location, people, raw, type, completed, date_confirmed, updated_at FROM events WHERE user_id = ? AND deleted_at = 0 ORDER BY date, time'
         ).bind(row.user_id).all();
 
         // iCal 文本转义。
@@ -819,7 +825,7 @@ export default {
           ).bind(userId, tombstoneCutoff).run();
         }
 
-        let query = 'SELECT id, title, date, time, end_time, end_date, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at FROM events WHERE user_id = ?';
+        let query = 'SELECT id, title, date, time, end_time, end_date, project_id, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at FROM events WHERE user_id = ?';
         const params = [userId];
 
         if (since) {
@@ -862,8 +868,8 @@ export default {
 
         // deleted_at = 0：若这个 id 之前被软删除过，重新创建即复活。
         await env.DB.prepare(
-          'INSERT INTO events (id, user_id, title, date, time, end_time, end_date, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, end_date = excluded.end_date, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, deleted_at = 0, updated_at = excluded.updated_at'
-        ).bind(eventId, userId, v.title, v.date, v.time, v.endTime, v.endDate, v.location, v.people, v.raw, v.type, v.completed, v.dateConfirmed, ts).run();
+          'INSERT INTO events (id, user_id, title, date, time, end_time, end_date, project_id, location, people, raw, type, completed, date_confirmed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, end_date = excluded.end_date, project_id = excluded.project_id, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, date_confirmed = excluded.date_confirmed, deleted_at = 0, updated_at = excluded.updated_at'
+        ).bind(eventId, userId, v.title, v.date, v.time, v.endTime, v.endDate, v.projectId, v.location, v.people, v.raw, v.type, v.completed, v.dateConfirmed, ts).run();
 
         return json({ id: eventId, updated_at: ts }, 201, headers);
       }
@@ -882,7 +888,7 @@ export default {
         // 因此这里不再做基于客户端时间戳的冲突判定 ——
         // 客户端时钟不可信，一律以服务端到达顺序为准。
         for (const ev of events) {
-          const { id, title, date, time, endTime, endDate, location, people, raw, type, completed } = ev;
+          const { id, title, date, time, endTime, endDate, projectId, location, people, raw, type, completed } = ev;
           if (!id || !title || !date) continue;
 
           // 按 id 查归属（不限 user_id）：查不到才可能是自己的新记录，
@@ -902,8 +908,8 @@ export default {
 
           const ts = Date.now();
           await env.DB.prepare(
-            'INSERT INTO events (id, user_id, title, date, time, end_time, end_date, location, people, raw, type, completed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, end_date = excluded.end_date, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, deleted_at = 0, updated_at = excluded.updated_at'
-          ).bind(id, userId, title, date, time || '', endTime || '', endDate || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
+            'INSERT INTO events (id, user_id, title, date, time, end_time, end_date, project_id, location, people, raw, type, completed, deleted_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date, time = excluded.time, end_time = excluded.end_time, end_date = excluded.end_date, project_id = excluded.project_id, location = excluded.location, people = excluded.people, raw = excluded.raw, type = excluded.type, completed = excluded.completed, deleted_at = 0, updated_at = excluded.updated_at'
+          ).bind(id, userId, title, date, time || '', endTime || '', endDate || '', projectId || '', location || '', people || '', raw || '', type || 'event', completed ? 1 : 0, ts).run();
           merged.push(id);
         }
 
@@ -963,8 +969,8 @@ export default {
           : existing.date_confirmed;
         // 编辑一条被删掉的记录等于复活它（用户动作比删除新）
         await env.DB.prepare(
-          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, end_date = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, date_confirmed = ?, deleted_at = 0, updated_at = ? WHERE id = ? AND user_id = ?'
-        ).bind(v.title, v.date, v.time, v.endTime, v.endDate, v.location, v.people, v.raw, v.type, newCompleted, newDateConfirmed, ts, eventId, userId).run();
+          'UPDATE events SET title = ?, date = ?, time = ?, end_time = ?, end_date = ?, project_id = ?, location = ?, people = ?, raw = ?, type = ?, completed = ?, date_confirmed = ?, deleted_at = 0, updated_at = ? WHERE id = ? AND user_id = ?'
+        ).bind(v.title, v.date, v.time, v.endTime, v.endDate, v.projectId, v.location, v.people, v.raw, v.type, newCompleted, newDateConfirmed, ts, eventId, userId).run();
 
         return json({ ok: true, updated_at: ts }, 200, headers);
       }

@@ -154,14 +154,22 @@ describe('monthLabel —— 月份名', () => {
 // ---------------------------------------------------------------------------
 
 describe('格子里划线的排列次序', () => {
-  test('日程 → 任务 → 项目，从上至下', () => {
+  test('日程 → 任务，从上至下', () => {
     const g = buildMonthGrid(2026, 11, [
-      ev({ id: 'p', date: '2026-11-02', type: 'project' }),
       ev({ id: 'k', date: '2026-11-02', type: 'task' }),
       ev({ id: 'e', date: '2026-11-02', type: 'event' }),
     ], new Date(2026, 10, 2));
     const cell = g.cells.find(c => c.date === '2026-11-02')!;
-    assert.deepEqual(cell.lines.map(l => l.type), ['event', 'task', 'project']);
+    assert.deepEqual(cell.lines.map(l => l.type), ['event', 'task']);
+  });
+
+  test('项目实体不进月历 —— 它是容器，不是某天发生的事', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'p', date: '2026-11-02', type: 'project' }),
+      ev({ id: 'e', date: '2026-11-02', type: 'event' }),
+    ], new Date(2026, 10, 2));
+    const cell = g.cells.find(c => c.date === '2026-11-02')!;
+    assert.deepEqual(cell.lines.map(l => l.id), ['e']);
   });
 
   test('输入顺序打乱也不影响结果（排序是稳定的规则，不靠运气）', () => {
@@ -169,10 +177,11 @@ describe('格子里划线的排列次序', () => {
       ev({ id: 't1', date: '2026-11-02', type: 'task' }),
       ev({ id: 'e1', date: '2026-11-02', type: 'event' }),
       ev({ id: 't2', date: '2026-11-02', type: 'task' }),
-      ev({ id: 'p1', date: '2026-11-02', type: 'project' }),
+      ev({ id: 'p1', date: '2026-11-02', type: 'event', projectId: 'proj-1' }),
     ], new Date(2026, 10, 2));
     const cell = g.cells.find(c => c.date === '2026-11-02')!;
-    assert.deepEqual(cell.lines.map(l => l.type), ['event', 'task', 'task', 'project']);
+    // 单日档：日程 → 任务 → 项目
+    assert.deepEqual(cell.lines.map(l => l.type), ['event', 'task', 'task', 'event']);
     // 同类型内部保持输入顺序（t1 在 t2 前面）
     assert.deepEqual(cell.lines.map(l => l.id), ['e1', 't1', 't2', 'p1']);
   });
@@ -269,13 +278,44 @@ describe('跨日事件占哪几天', () => {
     assert.equal(days[9].date, '2026-11-30');
   });
 
-  test('跨日事件仍然按类型排序（任务不会插到日程前面）', () => {
+  test('跨日事件排在最前（优先级最高），再按类型排', () => {
     const g = buildMonthGrid(2026, 11, [
-      ev({ id: 'span', date: '2026-11-21', endDate: '2026-11-23', type: 'project' }),
+      ev({ id: 'span', date: '2026-11-21', endDate: '2026-11-23', type: 'event' }),
       ev({ id: 'k', date: '2026-11-22', type: 'task' }),
       ev({ id: 'e', date: '2026-11-22', type: 'event' }),
     ], new Date(2026, 10, 2));
     const d22 = g.cells.find(c => c.date === '2026-11-22')!;
-    assert.deepEqual(d22.lines.map(l => l.id), ['e', 'k', 'span']);
+    // 跨日的在最上面；下面是 日程 → 任务
+    assert.deepEqual(d22.lines.map(l => l.id), ['span', 'e', 'k']);
+  });
+
+  test('五个档位：跨日非项目 → 跨日项目 → 单日日程 → 单日任务 → 单日项目', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'spanPlain', date: '2026-11-20', endDate: '2026-11-25' }),
+      ev({ id: 'spanProj', date: '2026-11-21', endDate: '2026-11-26', projectId: 'proj-1' }),
+      ev({ id: 'singleEvt', date: '2026-11-22', type: 'event' }),
+      ev({ id: 'singleTask', date: '2026-11-22', type: 'task' }),
+      ev({ id: 'singleProj', date: '2026-11-22', type: 'event', projectId: 'proj-1' }),
+    ], new Date(2026, 10, 2));
+    const d22 = g.cells.find(c => c.date === '2026-11-22')!;
+    assert.deepEqual(d22.lines.map(l => l.id), ['spanPlain', 'spanProj', 'singleEvt', 'singleTask', 'singleProj']);
+  });
+
+  test('两个跨日事件之间按开始日期排', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'later', date: '2026-11-20', endDate: '2026-11-25' }),
+      ev({ id: 'earlier', date: '2026-11-18', endDate: '2026-11-22' }),
+    ], new Date(2026, 10, 2));
+    const d21 = g.cells.find(c => c.date === '2026-11-21')!;
+    assert.deepEqual(d21.lines.map(l => l.id), ['earlier', 'later']);
+  });
+
+  test('同类型的单日之间保持输入顺序（不替用户重排）', () => {
+    const g = buildMonthGrid(2026, 11, [
+      ev({ id: 'second', date: '2026-11-02', type: 'event' }),
+      ev({ id: 'first', date: '2026-11-02', type: 'event' }),
+    ], new Date(2026, 10, 2));
+    const cell = g.cells.find(c => c.date === '2026-11-02')!;
+    assert.deepEqual(cell.lines.map(l => l.id), ['second', 'first']);
   });
 });
