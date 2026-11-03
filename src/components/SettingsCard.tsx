@@ -73,8 +73,12 @@ export default function SettingsCard({
   ];
 
   return (
-    <div className="card-float rounded-2xl border border-white/70 shadow-[0_8px_40px_rgba(28,28,28,0.16)] w-full max-w-xs overflow-hidden animate-panel-in">
-      <div className="flex justify-between items-center px-4 pt-4 pb-2">
+    // card-panel：跟日期卡、四宫格卡同一个宽度（--card-w）。
+    // 加 max-h + overflow-y-auto：设置项将来变多时往纵向长，不撑破屏幕。
+    <div className="card-float card-panel rounded-2xl border border-white/70 shadow-[0_8px_40px_rgba(28,28,28,0.16)] max-h-[70vh] overflow-y-auto animate-panel-in">
+      {/* 头部吸顶 —— 跟日期卡、四宫格卡一致：
+          卡片现在可以内部滚动了，标题不能跟着滚走。 */}
+      <div className="flex justify-between items-center px-4 pt-4 pb-2 sticky top-0 bg-white/95 backdrop-blur-sm z-10">
         <h2 className="font-semibold text-[#1C1C1C]">设置</h2>
         <button onClick={onClose}
           className="w-8 h-8 bg-[#F3F1ED] hover:bg-[#E8E4DF] rounded-lg text-[#A0A0A0] flex items-center justify-center transition-colors" aria-label="关闭">

@@ -37,7 +37,9 @@ export default function DayCard({
     onEditFormChange({ ...editForm, ...patch });
 
   return (
-    <div className="card-float rounded-2xl border border-white/70 shadow-[0_8px_40px_rgba(28,28,28,0.16)] w-full max-w-sm max-h-[70vh] overflow-y-auto animate-panel-in">
+    // card-panel：宽度统一走 --card-w（基准就是这张卡），
+    // 跟内容脱钩 —— 那天有几件事都不会改变这张卡的宽度。
+    <div className="card-float card-panel rounded-2xl border border-white/70 shadow-[0_8px_40px_rgba(28,28,28,0.16)] max-h-[70vh] overflow-y-auto animate-panel-in">
       <div className="flex justify-between items-center px-4 pt-4 pb-3 sticky top-0 bg-white/95 backdrop-blur-sm">
         <h2 className="font-semibold text-[#1C1C1C]">{date} 的安排</h2>
         <button onClick={onClose}

@@ -937,7 +937,7 @@ export default function Home() {
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>
-          <div className="bg-white rounded-2xl w-full max-w-xs p-6 shadow-lg animate-slide-up" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl w-[var(--card-w)] max-w-full p-6 shadow-lg animate-slide-up" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-2.5 mb-5">
               <img src="/icon-192x192.png" alt="" className="w-8 h-8 rounded-lg" />
               <div>
@@ -1028,7 +1028,7 @@ export default function Home() {
       {/* 激活弹窗 */}
       {showActivate && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30" onClick={() => { if (!activateLoading) { setShowActivate(false); setActivateStep('email'); setActivateError(''); } }}>
-          <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl p-6 w-[var(--card-w)] max-w-full shadow-lg" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">激活跨设备同步</h2>
             <p className="text-sm text-[#A0A0A0] mb-5">
               {activateStep === 'email' ? '输入邮箱，发送验证码激活' : `验证码已发送到 ${activateEmail}`}
@@ -1077,7 +1077,7 @@ export default function Home() {
       {/* 日历订阅弹窗 */}
       {showCalModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30" onClick={() => { setShowCalModal(false); setIcalCopied(false); }}>
-          <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl p-6 w-[var(--card-w)] max-w-full shadow-lg" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">导出到手机日历</h2>
             <p className="text-sm text-[#A0A0A0] mb-5">iPhone 相机扫码自动订阅，或复制链接手动添加</p>
 
@@ -1119,7 +1119,7 @@ export default function Home() {
       {/* 反馈弹窗 */}
       {showFeedback && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30" onClick={() => { setShowFeedback(false); setFeedbackSent(false); setFeedbackText(''); }}>
-          <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl p-6 w-[var(--card-w)] max-w-full shadow-lg" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-[#1C1C1C] mb-1">反馈建议</h2>
             <p className="text-sm text-[#A0A0A0] mb-4">遇到问题或有改进建议？告诉我们</p>
             {feedbackSent ? (
@@ -1149,7 +1149,7 @@ export default function Home() {
       {/* 使用说明弹窗 */}
       {showHelp && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowHelp(false)}>
-          <div className="bg-white rounded-2xl p-6 mx-4 w-full max-w-sm shadow-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl p-6 w-[var(--card-w)] max-w-full shadow-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-5">
               <h2 className="text-lg font-semibold text-[#1C1C1C]">使用说明 <span className="text-[10px] font-normal text-[#C0BDB8]">v4.0</span></h2>
               <button onClick={() => setShowHelp(false)} className="w-8 h-8 rounded-lg hover:bg-[#F3F1ED] text-[#A0A0A0] flex items-center justify-center transition-colors">&times;</button>
@@ -1203,7 +1203,7 @@ export default function Home() {
       {/* 导入弹窗（两步模式） */}
       {showImportModal && (
         <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={() => { setShowImportModal(false); setImportPreview(null); }}>
-          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-lg" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl w-[var(--card-w)] max-w-full max-h-[85vh] flex flex-col shadow-lg" onClick={e => e.stopPropagation()}>
             {importPreview ? (
               /* 第二步：解析预览 */
               <>
@@ -1395,9 +1395,9 @@ export default function Home() {
       {/* 输入区 —— 唯一输入入口：麦克风 + 文本框 + 同步状态 */}
       {/* 导出弹窗 */}
       {showExportModal && (
-        <div className="fixed inset-0 z-[70] bg-black/40 flex items-end sm:items-center justify-center"
+        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4"
           onClick={() => setShowExportModal(false)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[88vh] flex flex-col shadow-2xl"
+          <div className="bg-white rounded-2xl w-[var(--card-w)] max-w-full max-h-[88vh] flex flex-col shadow-2xl"
             onClick={ev => ev.stopPropagation()}>
             <div className="flex justify-between items-center p-5 border-b border-[#E8E4DF] shrink-0">
               <h2 className="font-semibold text-[#1C1C1C]">导出</h2>

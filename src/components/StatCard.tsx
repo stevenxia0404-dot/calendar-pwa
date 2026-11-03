@@ -32,7 +32,9 @@ export default function StatCard({
   const [adding, setAdding] = useState(false);
 
   return (
-    <div className="card-float rounded-2xl border border-white/70 shadow-[0_8px_40px_rgba(28,28,28,0.16)] w-full max-w-sm max-h-[70vh] overflow-y-auto animate-panel-in">
+    // card-panel：跟日期卡同一个宽度（--card-w）。
+    // 清单条目多不多只影响高度，内部滚动，宽度永远一样。
+    <div className="card-float card-panel rounded-2xl border border-white/70 shadow-[0_8px_40px_rgba(28,28,28,0.16)] max-h-[70vh] overflow-y-auto animate-panel-in">
       <div className="flex justify-between items-center px-4 pt-4 pb-3 sticky top-0 bg-white/95 backdrop-blur-sm">
         <h2 className="font-semibold text-[#1C1C1C]">
           {title}
