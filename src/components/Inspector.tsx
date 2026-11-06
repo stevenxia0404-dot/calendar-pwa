@@ -146,6 +146,8 @@ function readStyle(el: Element): MarkStyle {
 export default function Inspector() {
   const [on, setOn] = useState(false);
   const [marks, setMarks] = useState<Mark[]>([]);
+  /** 外面是 dev-frame 设备画布吗？是的话自己的面板让位给画布的收集箱 */
+  const [embedded, setEmbedded] = useState(false);
   const [hover, setHover] = useState<{ x: number; y: number; w: number; h: number; label: string } | null>(null);
   // 面板默认收起 —— 它挺占地方的，在设备画布里会把整个屏幕盖住。
   // 需要时点右下角的「标注」按钮或按 Alt+I。
@@ -254,6 +256,44 @@ export default function Inspector() {
     return () => window.removeEventListener('keydown', onKey);
   }, [on]);
 
+  // ---------- 外部转发 ----------
+  // dev-frame 画布在**外层页面**，它的键盘事件传不进 iframe。
+  // 所以画布那边用 postMessage 喊一声，这里负责切标注器。
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const t = e.data?.type;
+      if (t === 'dev:toggle-inspector') {
+        if (on) { setOn(false); setPanelOpen(false); }
+        else { setOn(true); setPanelOpen(true); }
+      } else if (t === 'dev:clear-marks') {
+        window.__marks = [];
+        markedElsRef.current = [];
+        setMarks([]);
+      } else if (t === 'dev:inspector-state') {
+        // 外层画布要知道现在开没开，才能把按钮画对
+        window.parent?.postMessage({ type: 'dev:inspector-state', on }, '*');
+      } else if (t === 'dev:host') {
+        // 外面是 dev-frame 设备画布 —— 那边有自己的「标注收集箱」抽屉，
+        // 这里的圆钮和面板就收起来，别在设备画面上挡着。
+        setEmbedded(true);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [on]);
+
+  // 标注开关一变，就告诉外层（父页面 = dev-frame 画布）
+  useEffect(() => {
+    try { window.parent?.postMessage({ type: 'dev:inspector-state', on }, '*'); } catch { /* 没有父窗口 */ }
+  }, [on]);
+
+  // 挂载时跟父页面打个招呼。
+  // 不能靠父页面「先发 dev:host 再等」—— 那时我可能还没挂上监听，消息会丢。
+  // 握手（我问、它答）才可靠。
+  useEffect(() => {
+    try { window.parent?.postMessage({ type: 'dev:inspector-hello' }, '*'); } catch { /* 没有父窗口 */ }
+  }, []);
+
   // ---------- 开关 ----------
   // 一个按钮一种行为：点一下开（模式 + 面板），再点一下全关。
   // 不做「模式开着但面板关着」这种中间态 —— 少一个状态就少一处让人懵的地方。
@@ -304,21 +344,24 @@ export default function Inspector() {
         ))}
       </div>
 
-      {/* 开关按钮 —— 关着时显示「标注」两字，让人知道这能点 */}
-      <button
-        onClick={toggle}
-        title="标注模式（Alt+I）—— 开启后点页面上的元素，我就能拿到它的精确信息"
-        className={`fixed z-[99999] rounded-full text-xs font-bold shadow-lg transition-all flex items-center justify-center
-          ${on
-            ? 'w-8 h-8 bg-[#ED6A3B] text-white scale-110'
-            : 'h-7 px-2.5 bg-[#1C1C1C]/75 text-white hover:bg-[#1C1C1C]'}`}
-        style={{ right: 12, bottom: 'calc(var(--sab) + 12px)' }}
-      >
-        {on ? '●' : marks.length ? `标注 ${marks.length}` : '标注'}
-      </button>
+      {/* 开关按钮 —— 关着时显示「标注」两字，让人知道这能点。
+          在 dev-frame 画布里不画：那边有收集箱抽屉负责开关。 */}
+      {!embedded && (
+        <button
+          onClick={toggle}
+          title="标注模式（Alt+I）—— 开启后点页面上的元素，我就能拿到它的精确信息"
+          className={`fixed z-[99999] rounded-full text-xs font-bold shadow-lg transition-all flex items-center justify-center
+            ${on
+              ? 'w-8 h-8 bg-[#ED6A3B] text-white scale-110'
+              : 'h-7 px-2.5 bg-[#1C1C1C]/75 text-white hover:bg-[#1C1C1C]'}`}
+          style={{ right: 12, bottom: 'calc(var(--sab) + 12px)' }}
+        >
+          {on ? '●' : marks.length ? `标注 ${marks.length}` : '标注'}
+        </button>
+      )}
 
-      {/* 面板 */}
-      {panelOpen && (
+      {/* 面板 —— 同上，画布里不画 */}
+      {!embedded && panelOpen && (
         <div className="fixed z-[99999] right-3 bottom-16 w-[300px] max-h-[58vh] bg-white rounded-xl border border-[#E8E4DF] shadow-xl flex flex-col overflow-hidden text-[#1C1C1C]">
           <div className="flex items-center justify-between px-3 py-2 border-b border-[#E8E4DF] bg-[#F7F5F2]">
             <span className="text-xs font-semibold">
