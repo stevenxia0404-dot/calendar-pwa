@@ -106,6 +106,20 @@ const ZOOM_MAX = 300;
 /** 「适应窗口」的最大倍率 —— 再大就没法看了，而且没必要 */
 const FIT_MAX = 2;
 
+/**
+ * 标注往哪儿送。
+ *
+ * **必须是同源路径**。这台机器设了 http_proxy，浏览器会把 127.0.0.1:8787
+ * 也交给代理，代理不转 localhost → fetch 直接 "Failed to fetch"（实测）。
+ * 同源请求不走代理，所以走 dev server 自己的 API 端点。
+ *
+ * 那个端点（src/app/api/dev-marks/route.ts）把标注落成带时间戳的文件，
+ * 外部的监听任务靠「出现了新文件」发现 → 对方那边能被自动叫醒。
+ *
+ * 剪贴板是第二条路，但多数环境里写不进去 —— 所以只能当辅助。
+ */
+const MARK_RECEIVER = '/api/dev-marks';
+
 /** 状态存哪 */
 const STORAGE_KEY = 'devframe.v2';
 
@@ -384,6 +398,12 @@ export default function DevFrame() {
     setMarks([]);
   }, []);
 
+  /** 删掉第 n 条标注 —— 标错了要能单独撤 */
+  const deleteMark = useCallback((n: number) => {
+    iframeRef.current?.contentWindow?.postMessage({ type: 'dev:delete-mark', n }, '*');
+    setMarks(prev => prev.filter(m => m.n !== n));
+  }, []);
+
   // ---------- 快捷键 ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -631,6 +651,7 @@ export default function DevFrame() {
           inspectorOn={inspectorOn}
           onToggleInspector={toggleInspector}
           onClear={clearMarks}
+          onDeleteMark={deleteMark}
           onClose={() => setDrawerOpen(false)}
         />
       )}
@@ -672,12 +693,13 @@ export default function DevFrame() {
    ================================================================== */
 
 function MarkDrawer({
-  marks, inspectorOn, onToggleInspector, onClear, onClose,
+  marks, inspectorOn, onToggleInspector, onClear, onDeleteMark, onClose,
 }: {
   marks: DevMark[];
   inspectorOn: boolean;
   onToggleInspector: () => void;
   onClear: () => void;
+  onDeleteMark: (n: number) => void;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -685,20 +707,68 @@ function MarkDrawer({
   const [copiedOne, setCopiedOne] = useState<number | null>(null);
   /** 哪一条展开了 HTML */
   const [openHtml, setOpenHtml] = useState<number | null>(null);
+  /** 通道状态：复制 / 发给我 / 导出，各自成功失败都要有明确反馈 */
+  const [sendState, setSendState] = useState<'idle' | 'copied' | 'copyFailed' | 'sent' | 'sendFailed'>('idle');
 
   const copyAll = async () => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(marks, null, 2));
       setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    } catch { /* 剪贴板不可用就手动选 */ }
+      setSendState('copied');
+      setTimeout(() => { setCopied(false); setSendState(s => (s === 'copied' ? 'idle' : s)); }, 1600);
+    } catch {
+      // 静默失败是最坑的 —— 看着像成功，其实啥也没写进去
+      setSendState('copyFailed');
+    }
   };
   const copyOne = async (m: DevMark) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(m, null, 2));
       setCopiedOne(m.n);
       setTimeout(() => setCopiedOne(c => (c === m.n ? null : c)), 1500);
-    } catch { /* 剪贴板不可用就手动选 */ }
+    } catch {
+      setSendState('copyFailed');
+    }
+  };
+
+  /** 发给我 —— POST 到本机收件服务 */
+  const sendToMe = async () => {
+    try {
+      const r = await fetch(MARK_RECEIVER, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(marks),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      setSendState('sent');
+      setTimeout(() => setSendState(s => (s === 'sent' ? 'idle' : s)), 2000);
+    } catch {
+      setSendState('sendFailed');
+    }
+  };
+
+  /** 导出成文件 —— 收件服务没开时的兜底 */
+  const exportFile = () => {
+    try {
+      const blob = new Blob([JSON.stringify(marks, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+      a.href = URL.createObjectURL(blob);
+      a.download = `devframe-marks-${stamp}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+      setSendState('copied');
+      setTimeout(() => setSendState(s => (s === 'copied' ? 'idle' : s)), 1600);
+    } catch {
+      setSendState('copyFailed');
+    }
+  };
+
+  /** 删掉第 n 条 */
+  const deleteMark = (n: number) => {
+    onDeleteMark(n);
   };
 
   return (
@@ -750,11 +820,11 @@ function MarkDrawer({
               const htmlOpen = openHtml === m.n;
               const justCopied = copiedOne === m.n;
               return (
-                <div key={m.n} className="px-3 py-2">
+                <div key={m.n} className="px-3 py-2 relative">
                   {/* 点条目 = 复制这一条 */}
                   <button
                     onClick={() => copyOne(m)}
-                    className="w-full text-left hover:opacity-75 transition-opacity"
+                    className="w-full text-left hover:opacity-75 transition-opacity pr-6"
                     title="点这条复制这一条的完整信息"
                   >
                     <div className="flex items-center gap-1.5">
@@ -779,8 +849,20 @@ function MarkDrawer({
                     </div>
                   </button>
 
+                  {/* 单条删除 —— 标错了得能单独撤，不能只能全清。
+                      绝对定位在右上角，**不能套在上面的 button 里** ——
+                      button 套 button 是非法 HTML，会报水合错误。 */}
+                  <button
+                    onClick={() => deleteMark(m.n)}
+                    className="absolute top-2 right-2 w-5 h-5 rounded text-[13px] leading-none text-[#C0BDB8] hover:bg-[#ED6A3B]/10 hover:text-[#ED6A3B] transition-colors"
+                    title={`删掉第 ${m.n} 条`}
+                    aria-label={`删掉第 ${m.n} 条`}
+                  >
+                    ×
+                  </button>
+
                   {/* 看源码 —— 不用复制出去就能瞄一眼 */}
-                  <div className="mt-1">
+                  <div className="mt-1 pr-6">
                     <button
                       onClick={() => setOpenHtml(htmlOpen ? null : m.n)}
                       className="text-[10px] text-[#8A8A8A] hover:text-[#ED6A3B] transition-colors"
@@ -801,27 +883,74 @@ function MarkDrawer({
       </div>
 
       {/* 底部操作 */}
-      <div className="shrink-0 px-3 py-2.5 border-t border-[#EDE9E4] flex gap-2">
-        <button
-          onClick={copyAll}
-          disabled={marks.length === 0}
-          className={`flex-1 h-8 rounded-lg text-[12px] transition-colors ${
-            marks.length === 0
-              ? 'bg-[#F3F1ED] text-[#C0BDB8] cursor-not-allowed'
-              : copied
-                ? 'bg-[#4E7D6C] text-white'
-                : 'bg-[#ED6A3B] text-white hover:bg-[#D45D2E]'
-          }`}
-        >
-          {copied ? '已复制 ✓' : `复制全部（${marks.length}）`}
-        </button>
-        <button
-          onClick={onClear}
-          disabled={marks.length === 0}
-          className="h-8 px-3 rounded-lg text-[12px] border border-[#E8E4DF] text-[#5C5C5C] hover:bg-[#F7F5F2] disabled:opacity-40"
-        >
-          清空
-        </button>
+      <div className="shrink-0 px-3 py-2.5 border-t border-[#EDE9E4]">
+        <div className="flex gap-2">
+          <button
+            onClick={copyAll}
+            disabled={marks.length === 0}
+            className={`flex-1 h-8 rounded-lg text-[12px] transition-colors ${
+              marks.length === 0
+                ? 'bg-[#F3F1ED] text-[#C0BDB8] cursor-not-allowed'
+                : sendState === 'copyFailed'
+                  ? 'bg-[#E24B4A] text-white'
+                  : copied
+                    ? 'bg-[#4E7D6C] text-white'
+                    : 'bg-[#ED6A3B] text-white hover:bg-[#D45D2E]'
+            }`}
+          >
+            {copied ? '已复制 ✓' : sendState === 'copyFailed' ? '复制失败' : `复制全部（${marks.length}）`}
+          </button>
+          <button
+            onClick={sendToMe}
+            disabled={marks.length === 0}
+            className={`flex-1 h-8 rounded-lg text-[12px] border transition-colors ${
+              marks.length === 0
+                ? 'border-[#EDE9E4] text-[#C0BDB8] cursor-not-allowed'
+                : sendState === 'sent'
+                  ? 'bg-[#4E7D6C] border-[#4E7D6C] text-white'
+                  : sendState === 'sendFailed'
+                    ? 'bg-[#E24B4A] border-[#E24B4A] text-white'
+                    : 'border-[#ED6A3B] text-[#ED6A3B] hover:bg-[#ED6A3B]/8'
+            }`}
+          >
+            {sendState === 'sent' ? '已送达 ✓' : sendState === 'sendFailed' ? '发送失败' : '发给我'}
+          </button>
+        </div>
+
+        {/* 次要操作 */}
+        <div className="mt-1.5 flex items-center justify-between">
+          <button
+            onClick={exportFile}
+            disabled={marks.length === 0}
+            className="text-[10px] text-[#8A8A8A] hover:text-[#ED6A3B] disabled:opacity-40 transition-colors"
+          >
+            导出 JSON 文件
+          </button>
+          <button
+            onClick={onClear}
+            disabled={marks.length === 0}
+            className="text-[10px] text-[#8A8A8A] hover:text-[#E24B4A] disabled:opacity-40 transition-colors"
+          >
+            清空全部
+          </button>
+        </div>
+
+        {/* 状态提示 —— 失败必须有话说，不能看着像成功 */}
+        {sendState === 'copyFailed' && (
+          <p className="mt-1.5 text-[10px] text-[#E24B4A] leading-relaxed">
+            剪贴板写不进去（浏览器或系统挡了）。用「发给我」或「导出 JSON 文件」。
+          </p>
+        )}
+        {sendState === 'sendFailed' && (
+          <p className="mt-1.5 text-[10px] text-[#E24B4A] leading-relaxed">
+            没送出去（API 端点没响应？）。用「导出 JSON 文件」兜底。
+          </p>
+        )}
+        {sendState === 'sent' && (
+          <p className="mt-1.5 text-[10px] text-[#4E7D6C] leading-relaxed">
+            已送达 —— 对方那边会自动读到。
+          </p>
+        )}
       </div>
     </div>
   );

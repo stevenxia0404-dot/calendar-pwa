@@ -281,6 +281,17 @@ export default function Inspector() {
         window.__marks = [];
         markedElsRef.current = [];
         setMarks([]);
+      } else if (t === 'dev:delete-mark') {
+        // 删掉第 n 条 —— 标错的地方要能单独撤掉，不能只能全清
+        const n = e.data?.n;
+        const idx = (window.__marks || []).findIndex(m => m.n === n);
+        if (idx >= 0) {
+          window.__marks = (window.__marks || []).filter(m => m.n !== n);
+          // 徽章位置是按「marks 与 markedEls 同序」算的，
+          // 两边必须同步删，否则后面的徽章会贴到错的位置上
+          markedElsRef.current.splice(idx, 1);
+          setMarks([...window.__marks]);
+        }
       } else if (t === 'dev:inspector-state') {
         // 外层画布要知道现在开没开，才能把按钮画对
         window.parent?.postMessage({ type: 'dev:inspector-state', on }, '*');

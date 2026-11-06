@@ -40,6 +40,18 @@ const nextConfig = withPWA({
   ...(isDev
     ? {
         rewrites: () => [
+          // dev-frame 的「发给我」通道 —— 指向本机的标注收件服务。
+          //
+          // 为什么不能直接 fetch('http://127.0.0.1:8787/...')：
+          // 这台机器设了 http_proxy，浏览器会把 127.0.0.1 也交给代理，
+          // 代理不转 localhost → fetch 直接 "Failed to fetch"（实测，localhost 也一样）。
+          // 走同源代理后，浏览器只跟 dev server 说话，代理在服务端绕开。
+          //
+          // 这条必须排在通用规则**前面** —— 先匹配先生效。
+          {
+            source: '/api/dev-marks',
+            destination: 'http://127.0.0.1:8787/marks',
+          },
           {
             source: '/api/:path*',
             destination: `${API_ORIGIN}/:path*`,
