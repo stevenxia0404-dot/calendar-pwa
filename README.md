@@ -136,8 +136,33 @@ npm run deploy
 
 # 前端
 npm run build
-npx wrangler pages deploy dist --project-name=cabin-english-trainer
+npx wrangler pages deploy dist --project-name=schedule-pro --branch=main
 ```
+
+> ⚠️ **项目名别搞错**：`schedule-pro` 才是菠萝日程的 Pages 项目
+> （域名 `schedule.boluomate.com`）。
+> `cabin-english-trainer` 是**公务英语 AI 陪练**那个 app 的项目
+> （域名 `en.boluomate.com`）—— 名字里没有「schedule」，特别容易看串。
+>
+> 2026-11-06 就是因为照着旧文档写成了 `cabin-english-trainer`，
+> 把菠萝日程的构建覆盖到了英语 app 上，害得重新部署了一遍才恢复。
+>
+> 部署前先确认：
+>
+> ```bash
+> npx wrangler pages project list
+> ```
+>
+> 另外 `schedule-pro` 项目**接了 GitHub 自动部署** ——
+> `git push origin main` 会自己触发构建上线。
+> 手动那条 `wrangler pages deploy` 只在需要立刻生效时用（比如构建参数要临时改）。
+>
+> `npx wrangler` 会去 npm registry 拉包，代理不稳时会 502。
+> 项目里已经装了 wrangler，直接用本地的：
+>
+> ```bash
+> ./workers-api/node_modules/.bin/wrangler pages deploy dist --project-name=schedule-pro --branch=main
+> ```
 
 ### 必配的 secret
 
