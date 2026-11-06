@@ -681,6 +681,10 @@ function MarkDrawer({
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  /** 刚复制的是第几条 —— 在条目上给个 ✓ */
+  const [copiedOne, setCopiedOne] = useState<number | null>(null);
+  /** 哪一条展开了 HTML */
+  const [openHtml, setOpenHtml] = useState<number | null>(null);
 
   const copyAll = async () => {
     try {
@@ -690,7 +694,11 @@ function MarkDrawer({
     } catch { /* 剪贴板不可用就手动选 */ }
   };
   const copyOne = async (m: DevMark) => {
-    try { await navigator.clipboard.writeText(JSON.stringify(m, null, 2)); } catch { /* 忽略 */ }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(m, null, 2));
+      setCopiedOne(m.n);
+      setTimeout(() => setCopiedOne(c => (c === m.n ? null : c)), 1500);
+    } catch { /* 剪贴板不可用就手动选 */ }
   };
 
   return (
@@ -738,32 +746,56 @@ function MarkDrawer({
           </div>
         ) : (
           <div className="divide-y divide-[#F3F1ED]">
-            {marks.map(m => (
-              <button
-                key={m.n}
-                onClick={() => copyOne(m)}
-                className="w-full text-left px-3 py-2 hover:bg-[#F7F5F2] transition-colors"
-                title="点这条复制这一条的完整信息"
-              >
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-mono text-[#ED6A3B] bg-[#ED6A3B]/10 rounded px-1">{m.n}</span>
-                  <span className="text-[12px] font-medium text-[#1C1C1C] truncate">
-                    {m.component || m.tag}
-                  </span>
-                  {m.viewport?.isMobile && (
-                    <span className="text-[9px] text-[#8A8A8A] border border-[#E8E4DF] rounded px-1">手机</span>
-                  )}
+            {marks.map(m => {
+              const htmlOpen = openHtml === m.n;
+              const justCopied = copiedOne === m.n;
+              return (
+                <div key={m.n} className="px-3 py-2">
+                  {/* 点条目 = 复制这一条 */}
+                  <button
+                    onClick={() => copyOne(m)}
+                    className="w-full text-left hover:opacity-75 transition-opacity"
+                    title="点这条复制这一条的完整信息"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-mono text-[#ED6A3B] bg-[#ED6A3B]/10 rounded px-1">{m.n}</span>
+                      <span className="text-[12px] font-medium text-[#1C1C1C] truncate">
+                        {m.component || m.tag}
+                      </span>
+                      {m.viewport?.isMobile && (
+                        <span className="text-[9px] text-[#8A8A8A] border border-[#E8E4DF] rounded px-1 shrink-0">手机</span>
+                      )}
+                      {justCopied && (
+                        <span className="text-[10px] text-[#4E7D6C] font-medium shrink-0">✓ 已复制</span>
+                      )}
+                    </div>
+                    {m.text && (
+                      <div className="mt-0.5 text-[11px] text-[#5C5C5C] truncate">{m.text}</div>
+                    )}
+                    <div className="mt-0.5 text-[10px] text-[#A8A49E] font-mono truncate">{m.selector}</div>
+                    <div className="mt-0.5 text-[10px] text-[#A8A49E] font-mono">
+                      {Math.round(m.rect?.w || 0)}×{Math.round(m.rect?.h || 0)}
+                      {' @ '}{Math.round(m.rect?.x || 0)},{Math.round(m.rect?.y || 0)}
+                    </div>
+                  </button>
+
+                  {/* 看源码 —— 不用复制出去就能瞄一眼 */}
+                  <div className="mt-1">
+                    <button
+                      onClick={() => setOpenHtml(htmlOpen ? null : m.n)}
+                      className="text-[10px] text-[#8A8A8A] hover:text-[#ED6A3B] transition-colors"
+                    >
+                      {htmlOpen ? '收起 HTML ▴' : '看 HTML ▾'}
+                    </button>
+                    {htmlOpen && (
+                      <pre className="mt-1 p-2 rounded bg-[#F7F5F2] border border-[#EDE9E4] text-[10px] leading-[1.5] font-mono text-[#5C5C5C] whitespace-pre-wrap break-all max-h-[180px] overflow-y-auto">
+                        {m.html}
+                      </pre>
+                    )}
+                  </div>
                 </div>
-                {m.text && (
-                  <div className="mt-0.5 text-[11px] text-[#5C5C5C] truncate">{m.text}</div>
-                )}
-                <div className="mt-0.5 text-[10px] text-[#A8A49E] font-mono truncate">{m.selector}</div>
-                <div className="mt-0.5 text-[10px] text-[#A8A49E] font-mono">
-                  {Math.round(m.rect?.w || 0)}×{Math.round(m.rect?.h || 0)}
-                  {' @ '}{Math.round(m.rect?.x || 0)},{Math.round(m.rect?.y || 0)}
-                </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

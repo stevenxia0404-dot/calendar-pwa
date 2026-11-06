@@ -156,6 +156,10 @@ export default function Inspector() {
   const [copied, setCopied] = useState(0);
 
   const hoverRef = useRef<{ x: number; y: number; w: number; h: number; label: string } | null>(null);
+  /** 上一次悬停的元素 —— 组件名只在「换了个元素」时重算 */
+  const lastHoverElRef = useRef<Element | null>(null);
+  /** 悬停元素的 React 组件名 */
+  const hoverCompRef = useRef('');
   const badgeLayerRef = useRef<HTMLDivElement | null>(null);
   const markedElsRef = useRef<Element[]>([]);
 
@@ -198,8 +202,16 @@ export default function Inspector() {
     const onMove = (e: MouseEvent) => {
       const el = e.target as Element;
       if (!el || el === document.body) return;
+      // 组件名只在「换了个元素」时重算 ——
+      // reactInfo 要走一遍 fiber 链，鼠标每动一个像素都算一遍太浪费
+      if (lastHoverElRef.current !== el) {
+        lastHoverElRef.current = el;
+        hoverCompRef.current = reactInfo(el).component || '';
+      }
       const r = el.getBoundingClientRect();
-      const label = `${el.tagName.toLowerCase()}${el.getAttribute('aria-label') ? ' [' + el.getAttribute('aria-label') + ']' : ''} · ${Math.round(r.width)}×${Math.round(r.height)}`;
+      const aria = el.getAttribute('aria-label');
+      // 组件名优先 —— 「这是 MonthCellView」比「这是 span」有用得多
+      const label = `${hoverCompRef.current || el.tagName.toLowerCase()}${aria ? ' [' + aria + ']' : ''} · ${Math.round(r.width)}×${Math.round(r.height)}`;
       hoverRef.current = { x: r.x, y: r.y, w: r.width, h: r.height, label };
       setHover(hoverRef.current);
     };
@@ -320,24 +332,24 @@ export default function Inspector() {
 
   return (
     <>
-      {/* 悬浮高亮框 */}
+      {/* 悬浮高亮框 —— 加粗 + 更实的底色，远看就知道鼠标在哪 */}
       {on && hover && (
         <div
-          className="fixed pointer-events-none z-[99998] rounded border-2 border-[#ED6A3B] bg-[#ED6A3B]/10"
+          className="fixed pointer-events-none z-[99998] rounded border-[3px] border-[#ED6A3B] bg-[#ED6A3B]/20"
           style={{ left: hover.x, top: hover.y, width: hover.w, height: hover.h }}
         >
-          <span className="absolute -top-6 left-0 bg-[#ED6A3B] text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap font-mono">
+          <span className="absolute -top-6 left-0 bg-[#ED6A3B] text-white text-[11px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap font-mono shadow-lg">
             {hover.label}
           </span>
         </div>
       )}
 
-      {/* 标记徽章层 */}
+      {/* 标记徽章层 —— 白圈描边，从画面里能一眼认出来 */}
       <div ref={badgeLayerRef} className="fixed inset-0 pointer-events-none z-[99997]">
         {marks.map(m => (
           <span
             key={m.n}
-            className="absolute top-0 left-0 w-5 h-5 rounded-full bg-[#ED6A3B] text-white text-[11px] font-bold flex items-center justify-center shadow-lg"
+            className="absolute top-0 left-0 w-6 h-6 rounded-full bg-[#ED6A3B] text-white text-[12px] font-bold flex items-center justify-center ring-2 ring-white shadow-[0_2px_10px_rgba(0,0,0,0.45)]"
           >
             {m.n}
           </span>
