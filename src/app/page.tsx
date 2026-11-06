@@ -1077,7 +1077,7 @@ export default function Home() {
 
             <div className="space-y-3 mb-6 text-xs text-[#5C5C5C]">
               <div className="flex gap-2.5"><span className="text-sm shrink-0">说话就记</span><span className="text-[#A0A0A0]">点麦克风说一句，它自己变成日程</span></div>
-              <div className="flex gap-2.5"><span className="text-sm shrink-0">一周一屏</span><span className="text-[#A0A0A0]">上面是这周的安排，下面是这周做了什么</span></div>
+              <div className="flex gap-2.5"><span className="text-sm shrink-0">整月一屏</span><span className="text-[#A0A0A0]">日历上是这个月的安排，下面是日程、任务、项目</span></div>
               <div className="flex gap-2.5"><span className="text-sm shrink-0">文件导入</span><span className="text-[#A0A0A0]">📎 上传课表 CSV/Excel · 预览后确认</span></div>
               <div className="flex gap-2.5"><span className="text-sm shrink-0">多设备同步</span><span className="text-[#A0A0A0]">邮箱激活 · 顶栏常驻同步状态</span></div>
               <div className="flex gap-2.5"><span className="text-sm shrink-0">苹果日历</span><span className="text-[#A0A0A0]">扫码订阅 · 15 分钟自动刷新</span></div>
