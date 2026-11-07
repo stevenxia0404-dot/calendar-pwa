@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && node -e \"require('fs').copyFileSync('public/favicon.ico','dist/favicon.ico')\"",
+    "build": "next build && node -e \"require('fs').copyFileSync('public/favicon.ico','dist/favicon.ico')\" && node -e \"['dist/probe.html','dist/probe.txt'].forEach(f=>{try{require('fs').unlinkSync(f)}catch(e){}})\"",
     "start": "next start",
     "lint": "next lint",
     "test": "node --experimental-strip-types --test tests/*.test.ts",

@@ -5,7 +5,11 @@ const withPWA = nextPWA({
   register: true,
   skipWaiting: true,
   disable: process.env.NODE_ENV === 'development',
-  buildExcludes: [/favicon\.ico$/],
+  // probe 是开发期诊断页，生产构建里会被删掉（见 package.json 的 build 脚本）。
+  // 必须同时把它从 SW 的预缓存清单里排除 ——
+  // 否则 SW 会去缓存一个已经不存在的文件，安装时 404。
+  // 两条都要：HTML 路由 + 它的 JS chunk。
+  buildExcludes: [/favicon\.ico$/, /probe\.html$/, /probe\/page-.*\.js$/],
 });
 
 // 生产 API 的真实地址。

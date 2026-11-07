@@ -49,7 +49,7 @@ export default function RootLayout({
             排查问题时红色警告比分析数据更碍事。
             不想要这个统计，去 Cloudflare Dashboard 关掉该 Pages 项目的
             Web Analytics 即可，页面照常工作。 */}
-        <meta httpEquiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://api.qrserver.com; connect-src 'self' https://schedule-api.boluomate.com http://192.168.1.27:8787; font-src 'self'; media-src 'self';" />
+        <meta httpEquiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://api.qrserver.com; connect-src 'self' https://schedule-api.boluomate.com; font-src 'self'; media-src 'self';" />
       </head>
       {/* 原来这里有 min-h-screen（min-height:100vh）——
           **必须去掉**。iOS 上 100vh 是「大视口」（地址栏收起时算的），
