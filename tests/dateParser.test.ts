@@ -352,3 +352,72 @@ describe('跨日表达', () => {
     assert.equal(p.title, '带学员走了 B777 应急演练');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 分钟：中文数字 + 固定说法
+//
+// Steven 真机语音发现的 bug：
+//   「下午三点五十分小朋友上网课」→ 时间 15:00，内容「五十分小朋友上网课」
+// 根因：matchTime 的正则里分钟只认「半|正|整」，
+//       「下午三点五十分」只匹配到「下午三点」，剩下的进了标题。
+// ---------------------------------------------------------------------------
+
+describe('中文分钟', () => {
+  const base = new Date(2026, 10, 3);
+
+  test('「下午三点五十分」→ 15:50，标题只剩事件本身', () => {
+    const p = parseText('下午三点五十分小朋友上网课', { baseDate: base });
+    assert.equal(p.time, '15:50');
+    assert.equal(p.title, '小朋友上网课');
+  });
+
+  test('「三点二十」→ 没时段词，3 点是歧义，不猜', () => {
+    // 既有纪律：纯「3点」不猜是 3 点还是 15 点，加了分钟也一样。
+    const p = parseText('三点二十开会', { baseDate: base });
+    assert.equal(p.time, '');
+  });
+
+  test('「下午三点二十」→ 15:20（语音识别常丢掉「分」字）', () => {
+    const p = parseText('下午三点二十开会', { baseDate: base });
+    assert.equal(p.time, '15:20');
+    assert.equal(p.title, '开会');
+  });
+
+  test('「上午九点半」→ 09:30（原有的半字写法不能被改坏）', () => {
+    const p = parseText('上午九点半例会', { baseDate: base });
+    assert.equal(p.time, '09:30');
+    assert.equal(p.title, '例会');
+  });
+
+  test('「晚上八点整」→ 20:00', () => {
+    const p = parseText('晚上八点整出发', { baseDate: base });
+    assert.equal(p.time, '20:00');
+    assert.equal(p.title, '出发');
+  });
+
+  test('「下午三点」→ 15:00（没有分钟还是 00 分）', () => {
+    const p = parseText('下午三点集合', { baseDate: base });
+    assert.equal(p.time, '15:00');
+    assert.equal(p.title, '集合');
+  });
+
+  test('「上午十点一刻」→ 10:15', () => {
+    const p = parseText('上午十点一刻取件', { baseDate: base });
+    assert.equal(p.time, '10:15');
+  });
+
+  test('「15:30」这种数字写法不受影响', () => {
+    const p = parseText('15:30 有会', { baseDate: base });
+    assert.equal(p.time, '15:30');
+  });
+
+  test('分钟不合法（超过 59）→ 宁可不认，不给错时间', () => {
+    const p = parseText('下午三点九十分开会', { baseDate: base });
+    assert.equal(p.time, '');
+  });
+
+  test('「下午」要跟着钟点一起被摘掉，不能留在标题里', () => {
+    const p = parseText('下午三点五十分小朋友上网课', { baseDate: base });
+    assert.ok(!p.title.includes('下午'), '标题里不该留「下午」：' + p.title);
+  });
+});

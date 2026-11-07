@@ -1062,7 +1062,7 @@ export default function Home() {
     // 月历卡片靠 flex-1 撑满剩余高度 —— 这样屏幕下半部分被卡片占住，
     // 壁纸不会空出一大块。
     // 输入区是 fixed 钉在底部的，文档流里由 InputArea 的占位块让出空间。
-    <main className="h-screen flex flex-col overflow-hidden">
+    <main className="h-screen h-[100dvh] flex flex-col overflow-hidden">
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>

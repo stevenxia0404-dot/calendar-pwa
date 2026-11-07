@@ -59,7 +59,7 @@ export default function MonthView({
           flex-1：卡片自己撑满剩余高度。
           下面四宫格是固定高度的，所以月历有多余空间就往下长 ——
           这样屏幕下半部分不会被壁纸空着。 */}
-      <div className="card-glass flex-1 min-h-0 rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-3 pt-2.5 pb-2.5 flex flex-col">
+      <div className="card-glass flex-[3] min-h-0 rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-3 pt-2.5 pb-2.5 flex flex-col">
         {/* 标题行：左「十一月」，中间翻月箭头，右年份 */}
         <div className="flex items-center justify-between px-1 mb-1">
           <div className="flex items-center gap-1">
@@ -96,22 +96,30 @@ export default function MonthView({
       </div>
 
       {/* ==================== 四宫格 ====================
-          窄屏 aspect-[3/2]：每块宽:高 = 3:2。
-          4:3 在手机上太夸张（单块 187×140，两排加起来 290px，
-          会把月历压得只剩 4 行），3:2 是「明显加大但不挤」的平衡点。
+          **高度按内容区比例分配，不按宽度算。**
 
-          宽屏改成定高 150px —— aspect 在 1280px 宽下会算出
-          单块 640×427、两排 840px，直接把月历卡片挤成一条缝
-          （实测桌面端月历只剩 30px）。宽屏空间富裕，
-          格子拉成宽扁的统计条，月历才拿得到该有的高度。
+          以前用 aspect-[3/2]：每块宽:高 = 3:2，高度由**宽度**决定。
+          问题就出在这儿 ——
+          宽度是固定的（屏宽减去边距），高度也就固定了，
+          但**屏幕高度是变的**（SE 667 / 13 Pro Max 926 / iPad 1133）。
+          矮屏上「月历 + 四宫格」加起来必然超过可用高度，
+          四宫格又是 shrink-0（不让步），于是它**溢出**内容区，
+          视觉上压到下面的输入区，或者把页面撑出可滚动高度。
 
-          shrink-0：高度固定，不跟月历抢空间。 */}
-      <div className="grid grid-cols-2 gap-2.5 shrink-0">
+          现在改成：内容区用 flex 比例分 —— 月历 3 份、四宫格 2 份。
+          两块的高度都跟着屏幕高度走，**永远不溢出**。
+          四宫格内部用 grid-rows-2 平分自己的高度，
+          所以每块的高度 = 四宫格高度的一半，不再依赖宽度比例。
+
+          flex-[3] / flex-[2] 而不是百分比：
+          百分比高度在 flex item 上会循环依赖（父高由 flex 决定，
+          子高又按百分比算），flex 比例没这个问题。 */}
+      <div className="grid grid-cols-2 grid-rows-2 gap-2.5 flex-[2] shrink-0 min-h-0">
         {statItems.map(s => (
           <button
             key={s.kind}
             onClick={() => onStatClick?.(s.kind)}
-            className="card-glass aspect-[3/2] md:aspect-auto md:h-[150px] rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-4 py-3.5 flex flex-col justify-end transition-all hover:bg-white/80 active:scale-[0.98]"
+            className="card-glass rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-4 py-3.5 flex flex-col justify-end transition-all hover:bg-white/80 active:scale-[0.98] min-h-0 overflow-hidden"
           >
             {/* 文字在左下角、数字在右下角 —— 同一行两端对齐。
                 标签加粗加深：#A0A0A0 + font-medium 在半透明卡片上太淡，

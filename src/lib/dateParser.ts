@@ -231,18 +231,38 @@ interface TimeMatch {
 
 /** 匹配「下午3点」「15:30」「晚上八点」「3点半」这类时刻 */
 function matchTime(text: string): TimeMatch | null {
-  const patterns: RegExp[] = [
-    // 下午3点 / 晚上八点 / 上午9点半 / 3点
-    /(凌晨|早上|早晨|清晨|上午|中午|下午|傍晚|晚上|夜里|夜晚|半夜)?\s*([0-9零〇一二两三四五六七八九十]{1,3})\s*[点時时]\s*(半|正|整)?/,
-    // 15:30 / 9:00
-    /([0-9]{1,2})\s*[:：]\s*([0-9]{2})/,
+  // 每个模式**显式标出种类**。
+  //
+  // 为什么不能靠 `p.source.includes(':')` 判断：
+  // 那是个脆弱的特征匹配 —— 只要正则里出现任何非捕获组 `(?:`，
+  // source 里就带一个冒号，会被误判成「数字 HH:mm 模式」。
+  // 踩过：给中文分钟加了个 `(?:\s*(...)\s*分?)?`，
+  // 结果 parseInt('下午') = NaN，时间变成 'NaN:03'。
+  const patterns: { re: RegExp; kind: 'cn' | 'hhmm' }[] = [
+    {
+      // 下午3点 / 晚上八点 / 上午9点半 / 3点
+      // 下午三点五十分 / 三点二十 / 三点零五分 / 三点一刻
+      //
+      // 分钟的写法有两种，都得认：
+      //   「半 / 正 / 整 / 一刻 / 三刻」—— 固定说法
+      //   「五十 / 二十 / 五」+ 可选的「分」—— 中文数字，后面那个「分」字
+      //     语音识别时经常丢（说「三点五十」可能不给「分」），
+      //     所以「分」做成可选；但数字部分限 1~3 位，避免把后面的内容吃进来。
+      kind: 'cn',
+      re: /(凌晨|早上|早晨|清晨|上午|中午|下午|傍晚|晚上|夜里|夜晚|半夜)?\s*([0-9零〇一二两三四五六七八九十]{1,3})\s*[点時时]\s*(半|正|整|一刻|三刻)?(?:\s*([0-9零〇一二两三四五六七八九十]{1,3})\s*分?)?/,
+    },
+    {
+      // 15:30 / 9:00
+      kind: 'hhmm',
+      re: /([0-9]{1,2})\s*[:：]\s*([0-9]{2})/,
+    },
   ];
 
-  for (const p of patterns) {
-    const m = text.match(p);
+  for (const { re, kind } of patterns) {
+    const m = text.match(re);
     if (!m || m.index === undefined) continue;
 
-    if (p.source.includes(':')) {
+    if (kind === 'hhmm') {
       // HH:mm
       const h = parseInt(m[1], 10);
       const min = parseInt(m[2], 10);
@@ -259,7 +279,18 @@ function matchTime(text: string): TimeMatch | null {
     const period = m[1];
     let hour = parseNumber(m[2]);
     if (hour === null || hour > 24) continue;
-    const minute = m[3] === '半' ? 30 : 0;
+
+    // 分钟：固定说法优先，其次中文数字
+    let minute = 0;
+    if (m[3] === '半') minute = 30;
+    else if (m[3] === '一刻') minute = 15;
+    else if (m[3] === '三刻') minute = 45;
+    else if (m[4] !== undefined) {
+      const mm = parseNumber(m[4]);
+      // 分钟不合法就放弃这个匹配 —— 宁可漏，不可错
+      if (mm === null || mm > 59) continue;
+      minute = mm;
+    }
 
     if (period) {
       // 「下午3点」→ 15:00；「晚上8点」→ 20:00
