@@ -1099,7 +1099,7 @@ export default function Home() {
           形态：以前是全宽白条（bg-white + 底边框），
           现在改成悬浮的圆角卡片 —— 壁纸能透过四周的缝看见，
           顶栏本身半透明 + 毛玻璃。 */}
-      <header className="sticky top-0 z-50 px-3 pt-[calc(var(--sat)+0.75rem)] pb-1 sm:px-4">
+      <header className="sticky top-0 z-50 px-4 pt-[calc(var(--sat)+0.75rem)] pb-1">
         <div className="card-glass max-w-full mx-auto rounded-2xl border border-white/60 shadow-[0_2px_16px_rgba(28,28,28,0.06)] px-4 py-3 sm:px-5 sm:py-3.5">
           <div className="flex flex-wrap justify-between items-center gap-y-2 max-w-full">
             <h1 className="text-xl font-semibold text-[#1C1C1C] flex items-center gap-2 tracking-tight shrink-0">
@@ -1513,7 +1513,7 @@ export default function Home() {
 
           min-h-0：flex 子项默认 min-height:auto，
           不加的话月历的 flex-1 撑不开，四宫格会把整页顶出视口。 */}
-      <div className="flex-1 flex flex-col gap-2.5 mx-3 mt-3 pb-2 min-h-0">
+      <div className="flex-1 flex flex-col gap-2.5 mx-4 mt-3 pb-2 min-h-0">
 
         <MonthView
           year={monthAnchor.getFullYear()}

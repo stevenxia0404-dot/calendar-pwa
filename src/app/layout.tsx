@@ -14,6 +14,24 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   themeColor: '#F7F5F2',
+  /**
+   * viewport-fit=cover —— 少了这一行，iOS 会把网页**限制在安全区内**
+   * （状态栏和 home indicator 之间），后果有三条：
+   *
+   *   1. 壁纸只铺安全区，顶部状态栏那一条露出系统默认背景（白条）
+   *   2. 网页底边正好在 home indicator 上沿，底部输入胶囊被切掉两个角
+   *   3. env(safe-area-inset-*) 返回 0 → --sat/--sab 全是 0
+   *      （内容本来就在安全区内，就不需要再留了）
+   *
+   * 加上之后：网页铺满整屏，env() 返回真实值（13 Pro Max 是 47 / 34），
+   * 顶栏被 pt-[calc(var(--sat)+...)] 推下来、输入区被 pb-[var(--sab)] 推上去。
+   *
+   * 为什么开发期的设备画布看不出来：iframe 里 env() 恒为 0，
+   * 画布是**手动注入** --sat/--sab 来模拟的 —— 数值对了，
+   * 但「没有 cover 时网页被限制在安全区内」这个行为差异没法模拟。
+   * 这个 bug 是靠真机截图才发现的。
+   */
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({
