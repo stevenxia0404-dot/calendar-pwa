@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import ViewportSync from '@/components/ViewportSync';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -48,9 +49,17 @@ export default function RootLayout({
             排查问题时红色警告比分析数据更碍事。
             不想要这个统计，去 Cloudflare Dashboard 关掉该 Pages 项目的
             Web Analytics 即可，页面照常工作。 */}
-        <meta httpEquiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://api.qrserver.com; connect-src 'self' https://schedule-api.boluomate.com; font-src 'self'; media-src 'self';" />
+        <meta httpEquiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://api.qrserver.com; connect-src 'self' https://schedule-api.boluomate.com http://192.168.1.27:8787; font-src 'self'; media-src 'self';" />
       </head>
-      <body className="min-h-screen bg-[#F7F5F2]">
+      {/* 原来这里有 min-h-screen（min-height:100vh）——
+          **必须去掉**。iOS 上 100vh 是「大视口」（地址栏收起时算的），
+          比用户真正看得见的高度高出一截，min-height 会把 body 撑高，
+          文档就比视口高 → 手指能滑动页面。
+
+          现在高度由 globals.css 的 html/body { height:100% } + JS 写入的
+          --app-vh（= visualViewport.height）共同决定。 */}
+      <body className="bg-[#F7F5F2]">
+        <ViewportSync />
         {children}
       </body>
     </html>

@@ -1058,11 +1058,21 @@ export default function Home() {
   // ==================== UI ====================
 
   return (
-    // h-screen：整个页面锁定一屏高，不滚动。
-    // 月历卡片靠 flex-1 撑满剩余高度 —— 这样屏幕下半部分被卡片占住，
-    // 壁纸不会空出一大块。
-    // 输入区是 fixed 钉在底部的，文档流里由 InputArea 的占位块让出空间。
-    <main className="h-screen h-[100dvh] flex flex-col overflow-hidden">
+    // 高度用 --app-vh（= window.visualViewport.height），
+    // **不是 100vh / 100dvh**。
+    //
+    // 原因（iOS）：
+    // · 100vh = 大视口（地址栏收起时算的），比真实可见区高 → 文档超高 → 能滑
+    // · 100dvh 在 PWA 全屏模式下约等于 100vh，同样偏高
+    // · 之前写的 `h-screen h-[100dvh]` 还有一个坑：Tailwind 编译后
+    //   `.h-screen{height:100vh}` 排在 `.h-[100dvh]` **后面**（实测位置 7131 vs 6970），
+    //   同优先级下后者胜 → 赢的是 100vh，dvh 根本没生效。
+    //
+    // visualViewport.height 是浏览器明确告诉我们的「用户此刻真正看得见多少像素」，
+    // 键盘弹出时它会立刻变小，地址栏收放时它跟着变 —— 唯一可靠的数字。
+    //
+    // overflow-hidden 锁住内容不外溢；html/body 上的 overflow 锁在 globals.css。
+    <main className="app-shell flex flex-col overflow-hidden">
       {/* v1.0 更新弹窗 */}
       {showVersionModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={dismissVersionModal}>

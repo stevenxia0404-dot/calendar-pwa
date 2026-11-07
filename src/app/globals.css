@@ -19,9 +19,20 @@
      不留这一块的话顶栏（标题 + 导出/导入/激活）会被状态栏压住。 */
   --sat: env(safe-area-inset-top, 0px);
 
+  /* 真实可视区高度 / 顶部偏移 / 键盘高度。
+     由 <ViewportSync /> 在运行时写入（读 window.visualViewport）。
+
+     为什么不用 100vh / 100dvh：iOS 上这两个单位都不是「用户此刻看得见的高度」
+     —— 100vh 是大视口（地址栏收起时算的），100dvh 在 PWA 里约等于它、
+     键盘弹出时也不变。详见 src/components/ViewportSync.tsx 的注释。
+
+     兜底值给 100dvh：没有 JS（比如 SSR 首帧）时不至于高度塌成 0。 */
+  --app-vh: 100dvh;
+  --app-vtop: 0px;
+  --app-kb: 0px;
+
   /* 弹出卡片的统一宽度。
      基准是「点日历某一天弹出的那张卡」（11/21 那张）—— 它的观感宽度是 350px。
-
      为什么必须定死成一个常量：
      之前卡片写的是 `w-full max-w-sm`。但 w-full 在 flex item 里是「收缩到内容宽度」，
      所以每张卡的实际宽度 = 自己内容的 max-content —— 标题长短一变，宽度就跟着变。
@@ -84,8 +95,44 @@ textarea::placeholder {
    isolation: isolate —— 让 body 成为 stacking context，
    这样 ::before 的 z-index:-1 落在 body 背景之上、内容之下，
    不会跑到 html 背景后面被吃掉。 */
+/* 整页锁一屏，不许滚。
+   ---------------------------------------------------------------------------
+   **为什么高度用 var(--app-vh) 而不是 100vh / 100dvh**：
+
+   iOS 上这两个单位都不是「用户此刻真正看得见的高度」：
+   · 100vh = 大视口（地址栏/工具栏**收起来**时算的）→ 比可视区高
+   · 100dvh = 动态视口 → PWA 全屏模式下约等于 100vh，键盘弹出时也不变
+
+   `var(--app-vh)` 由 <ViewportSync /> 从 `window.visualViewport.height` 写入，
+   那是浏览器明确告诉我们的「用户此刻真正看得见多少像素」。
+
+   **另外两个必须一起做的**：
+   · `overflow:hidden` —— 光锁 main 不够，body/html 仍可滚
+   · `overscroll-behavior:none` —— iOS 的橡皮筋回弹（内容不多也能被拖动）
+     和下拉刷新一并禁掉
+   --------------------------------------------------------------------------- */
 html, body {
-  min-height: 100%;
+  height: var(--app-vh, 100dvh);
+  max-height: var(--app-vh, 100dvh);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* 应用外壳 —— 高度跟着真实可视区走。
+   为什么不用 Tailwind 的 h-[var(--app-vh)]：
+   Tailwind 生成 arbitrary value 时会对 var() 里的字符做转义，
+   实测编译后 **根本没有生成这个类**（grep 计数 0），页面直接失去高度约束。
+   自己写一条 class 最稳 —— 不跟 Tailwind 的转义规则较劲。 */
+.app-shell {
+  height: var(--app-vh, 100dvh);
+}
+
+/* 底部输入区 —— 键盘弹出时整体上移。
+   iOS 上 position:fixed 是相对**布局视口**定位的，
+   键盘弹出时布局视口不变、可视区被吃掉一块 —— 不让位输入框就被盖住。
+   同样不用 Tailwind 的 bottom-[var(--app-kb)]（那个也会编译不出来）。 */
+.input-dock {
+  bottom: var(--app-kb, 0px);
 }
 
 body {

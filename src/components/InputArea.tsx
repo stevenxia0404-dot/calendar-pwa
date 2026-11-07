@@ -272,7 +272,12 @@ export default function InputArea({
         // z-[100]：必须高于所有浮层（z-[60]）。
         // 浮层打开时下面的内容全模糊，但输入框永远在最上层、永远清晰可输入 ——
         // 它是「当前编辑目标」的输入框，浮层打开时依然能用。
-        className="fixed bottom-0 left-0 right-0 z-[100] shrink-0 pb-[var(--sab)]"
+        //
+        // bottom 用 --app-kb（键盘高度，键盘没弹时是 0）：
+        // iOS 上 position:fixed 是相对**布局视口**定位的，
+        // 键盘弹出时布局视口不变，可视区被键盘吃掉一块 ——
+        // 不让位的话输入框会被键盘盖住。
+        className="input-dock fixed left-0 right-0 z-[100] shrink-0 pb-[var(--sab)]"
       >
 
         {/* 平台级限制提示 —— 语音是这个产品的核心，
