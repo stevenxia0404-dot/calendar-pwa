@@ -20,6 +20,7 @@ import MonthView from '@/components/MonthView';
 import DayCard from '@/components/DayCard';
 import StatCard from '@/components/StatCard';
 import SettingsCard from '@/components/SettingsCard';
+import DeleteAccountPanel from '@/components/DeleteAccountPanel';
 import InputArea from '@/components/InputArea';
 import { useDialog, DialogHost } from '@/components/Dialog';
 import Inspector from '@/components/Inspector';
@@ -166,6 +167,8 @@ export default function Home() {
   const [showDayCard, setShowDayCard] = useState(false);
   const [showStatCard, setShowStatCard] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  /** 注销账号面板（删云端数据）—— 不可逆，要输入邮箱确认 */
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false);
   /** 四宫格点的是哪一类 */
   const [statKind, setStatKind] = useState<'event' | 'task' | 'project' | 'completed'>('event');
 
@@ -578,6 +581,42 @@ export default function Home() {
     clearQueue();
     setPendingCount(0);
     setToken(null); setUser(null);
+  };
+
+  // 注销账号 —— 删掉云端全部数据（不可逆）
+  //
+  // 跟 handleLogout 的区别：
+  //   退出登录 → 只是这台设备不同步，数据还在云端，换设备登录能接着用
+  //   注销账号 → 云端数据 + 账号 + 凭证全删，谁都拿不回来了
+  //
+  // 失败要**抛出**给面板显示 —— 静默失败最坑：
+  // 用户以为删掉了，其实数据还在。
+  const handleDeleteAccount = async () => {
+    if (!token) throw new Error('尚未登录，无法注销');
+
+    const res = await fetch(`${API_BASE}/auth/account`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    const text = await res.text();
+    let data: Record<string, unknown> = {};
+    if (text) {
+      try { data = JSON.parse(text) as Record<string, unknown>; } catch { /* 网关错误 */ }
+    }
+
+    if (!res.ok) {
+      throw new Error((data.error as string) || `注销失败（HTTP ${res.status}）`);
+    }
+
+    // 云端已清空 —— 本地状态也要清
+    setShowDeleteAccount(false);
+    setShowSettings(false);
+    handleLogout();
+    await tell('账号已注销', '云端数据已全部删除。这台设备上的本地记录仍保留。');
   };
 
 
@@ -1465,10 +1504,21 @@ export default function Home() {
               onImport={() => { setImportText(''); setImportPreview(null); setShowImportModal(true); }}
               onTemplate={generateCsvTemplate}
               onLogout={handleLogout}
+              onDeleteAccount={() => setShowDeleteAccount(true)}
               onClose={() => setShowSettings(false)}
             />
           </div>
         </div>
+      )}
+
+      {/* 注销账号面板 —— z-[80] 比设置卡（z-[60]）高，两层叠着。
+          关掉设置卡但保留注销面板 —— 用户确认完要看到结果提示。 */}
+      {showDeleteAccount && user && (
+        <DeleteAccountPanel
+          email={user.email}
+          onClose={() => setShowDeleteAccount(false)}
+          onConfirm={handleDeleteAccount}
+        />
       )}
 
       {showDayCard && detailDate && (

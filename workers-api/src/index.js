@@ -568,13 +568,26 @@ export default {
         return json({ user: { id: user.id, email: user.email, role } }, 200, headers);
       }
 
-      // 删除账号
+      // 删除账号（注销）—— 删掉这个用户在云端的**全部**数据
       if (path === '/auth/account' && method === 'DELETE') {
         const payload = await requireAuth(request, env);
         if (!payload) return json({ error: '尚未激活同步，你的数据很安全' }, 401, headers);
 
-        await env.DB.prepare('DELETE FROM events WHERE user_id = ?').bind(payload.userId).run();
-        await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(payload.userId).run();
+        // ⚠️ 四张表都要清 —— 漏一张就留下「还能用的凭证」：
+        //   events              该用户的全部日程（主数据）
+        //   users               用户记录本身
+        //   verification_codes  按邮箱存的验证码（能登录这个账号！）
+        //   cal_tokens          日历订阅 token（能继续拉这个账号的数据）
+        //
+        // 用 db.batch() 保证原子性 —— 逐条 await 的话，中途失败会留下
+        // 「删了一半」的账号：用户记录没了但验证码还在 = 凭证泄漏。
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM events WHERE user_id = ?').bind(payload.userId),
+          env.DB.prepare('DELETE FROM cal_tokens WHERE user_id = ?').bind(payload.userId),
+          env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(payload.email),
+          env.DB.prepare('DELETE FROM users WHERE id = ?').bind(payload.userId),
+        ]);
+
         return json({ ok: true }, 200, headers);
       }
 

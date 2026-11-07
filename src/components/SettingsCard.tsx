@@ -19,13 +19,15 @@ export interface SettingsCardProps {
   onImport?: () => void;
   onTemplate?: () => void;
   onLogout?: () => void;
+  /** 注销账号（删云端数据）—— 跟「退出登录」是两回事 */
+  onDeleteAccount?: () => void;
   onClose: () => void;
 }
 
 export default function SettingsCard({
-  isOnline, onActivate, onCalSubscribe, onExport, onImport, onTemplate, onLogout, onClose,
+  isOnline, onActivate, onCalSubscribe, onExport, onImport, onTemplate, onLogout, onDeleteAccount, onClose,
 }: SettingsCardProps) {
-  const items: { key: string; label: string; hint?: string; onClick?: () => void; icon: React.ReactNode; danger?: boolean }[] = [
+  const items: { key: string; label: string; hint?: string; onClick?: () => void; icon: React.ReactNode; danger?: boolean; keepOpen?: boolean }[] = [
     // 未激活时把「激活」放在最上面 —— 这是当前最该做的一件事
     ...(!isOnline ? [{
       key: 'activate',
@@ -70,6 +72,22 @@ export default function SettingsCard({
       icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" /></svg>,
       danger: true,
     },
+    // 注销 = 删掉云端数据，跟「退出登录」（只是这台设备不同步）完全不同。
+    // 放在「退出登录」下面 —— 两个都是 danger 色，但意图不一样：
+    //   退出登录 → 数据还在，换设备登录就能接着用
+    //   注销账号 → 数据没了，谁都拿不回来
+    {
+      key: 'delete-account',
+      label: '注销账号',
+      hint: isOnline ? '删除云端全部数据' : '当前未激活',
+      onClick: isOnline ? onDeleteAccount : undefined,
+      icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
+      danger: true,
+      // keepOpen：注销面板会盖在设置卡上面（z80 > z60），
+      // 所以这里**不要**顺手关掉设置卡 —— 关掉的话用户会看到层级跳变，
+      // 而且失去「我是在设置里点的注销」这个上下文。
+      keepOpen: true,
+    },
   ];
 
   return (
@@ -92,7 +110,7 @@ export default function SettingsCard({
           return (
             <button
               key={it.key}
-              onClick={() => { if (it.onClick) { it.onClick(); onClose(); } }}
+              onClick={() => { if (it.onClick) { it.onClick(); if (!it.keepOpen) onClose(); } }}
               disabled={disabled}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
                 disabled
